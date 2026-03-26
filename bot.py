@@ -1,26 +1,21 @@
 import asyncio
 import logging
+import re
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import CommandStart
 from aiogram.types import Message
-import re
 
 import config
-from fotmob_client import FotmobClient
+from football_client import FootballClient
 from name_resolver import NameResolver
-from stats_formatter import format_tournament_stats
+from stats_formatter import format_player_stats
 from ai_analyzer import AIAnalyzer
 
 
 def extract_query(message: Message, bot_username: str) -> str | None:
-    """
-    Возвращает строку запроса.
-    В группах — только если есть упоминание бота (@username); упоминание убирается из текста.
-    В личке — весь текст.
-    """
     text = (message.text or "").strip()
     if not text:
         return None
@@ -38,7 +33,6 @@ def extract_query(message: Message, bot_username: str) -> str | None:
 
         if not (has_entity_mention or has_text_mention):
             return None
-        # убираем упоминание из текста (регистронезависимо)
         cleaned = pattern.sub("", text)
         cleaned = cleaned.replace(f"@@{bot_username}", "")
         cleaned = cleaned.strip()
@@ -75,7 +69,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-async def create_bot() -> tuple[Bot, Dispatcher, FotmobClient, NameResolver]:
+async def create_bot() -> tuple[Bot, Dispatcher, FootballClient, NameResolver]:
     if not config.BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is missing. Add it to .env")
 
@@ -88,22 +82,22 @@ async def create_bot() -> tuple[Bot, Dispatcher, FotmobClient, NameResolver]:
     me = await bot.get_me()
     bot_username = (me.username or "").lower()
 
-    fotmob_client = FotmobClient()
-    resolver = NameResolver(fotmob_client)
+    fc = FootballClient()
+    await fc.start()
+    resolver = NameResolver(fc)
     analyzer = AIAnalyzer()
-    await fotmob_client.start()
 
     @dp.message(CommandStart())
     async def on_start(message: Message) -> None:
         await message.answer(
-            "Привет! Отправь имя футболиста на русском или латиницей — пришлю статистику за текущий сезон по турнирам."
+            "Привет! Отправь имя футболиста — пришлю статистику за сезон.\n"
+            "Можно на русском или латиницей. Например: Салах, Mbappe, Холанд Сити"
         )
 
     @dp.message(F.text)
     async def handle_query(message: Message) -> None:
         query = extract_query(message, bot_username)
         if not query:
-            # В группах отвечаем только на упоминание бота
             if message.chat.type in {"group", "supergroup"}:
                 return
             await message.answer("Нужен текстовый запрос с именем игрока.")
@@ -112,38 +106,27 @@ async def create_bot() -> tuple[Bot, Dispatcher, FotmobClient, NameResolver]:
         await message.answer("Ищу игрока, секунду...")
         try:
             resolved = await resolver.resolve(query)
-        except Exception as exc:  # network or LLM errors
+        except Exception:
             logger.exception("resolve failed")
-            await message.answer("Не получилось распознать игрока. Попробуй ещё раз.")
+            await message.answer("Не получилось найти игрока. Попробуй ещё раз.")
             return
 
         if not resolved:
-            await message.answer("Не нашёл такого игрока. Попробуй уточнить написание или клуб.")
+            await message.answer("Не нашёл такого игрока. Попробуй уточнить имя или добавить команду.")
             return
 
         try:
-            season, tour_stats = await fotmob_client.get_current_season_tournament_stats(
-                resolved.player_id
-            )
-            advanced = await fotmob_client.get_player_advanced_stats(resolved.player_id)
+            player_data = await fc.get_player_by_id(resolved.player_id)
         except Exception:
             logger.exception("stat fetch failed")
-            await message.answer("Не удалось получить статистику с FotMob.")
+            await message.answer("Не удалось получить статистику.")
             return
 
-        if not season or not tour_stats:
-            await message.answer("Статистики за текущий сезон нет или игрок не активен.")
+        if not player_data:
+            await message.answer("Статистика не найдена.")
             return
 
-        reply = format_tournament_stats(season, tour_stats, advanced)
-        reply_header = f"*{resolved.name}*"
-        if resolved.team:
-            reply_header += f" ({resolved.team})"
-        position = advanced.get("position") if advanced else None
-        if position:
-            reply_header += f" — {position}"
-
-        raw_text = f"{reply_header}\n\n{reply}"
+        raw_text = format_player_stats(player_data)
         final_text = await analyzer.analyze(raw_text)
         if final_text:
             for chunk in split_message(final_text):
@@ -152,15 +135,15 @@ async def create_bot() -> tuple[Bot, Dispatcher, FotmobClient, NameResolver]:
             for chunk in split_message(raw_text):
                 await message.answer(chunk)
 
-    return bot, dp, fotmob_client, resolver
+    return bot, dp, fc, resolver
 
 
 async def main() -> None:
-    bot, dp, fotmob_client, _resolver = await create_bot()
+    bot, dp, fc, _resolver = await create_bot()
     try:
         await dp.start_polling(bot)
     finally:
-        await fotmob_client.close()
+        await fc.close()
 
 
 if __name__ == "__main__":
