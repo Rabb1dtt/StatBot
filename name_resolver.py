@@ -1,6 +1,12 @@
 import asyncio
+import re
+import unicodedata
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List, Dict
+
+import cyrtranslit
+from rapidfuzz import fuzz
+from cachetools import TTLCache
 
 try:
     from openai import OpenAI
@@ -8,7 +14,7 @@ except Exception:
     OpenAI = None  # type: ignore
 
 import config
-from football_client import FootballClient
+from fotmob_client import FotmobClient
 
 
 @dataclass
@@ -16,11 +22,46 @@ class ResolvedPlayer:
     player_id: int
     name: str
     team: Optional[str]
-    position: Optional[str]
+    score: float
+
+
+def _normalize(text: str) -> str:
+    return text.lower().strip()
+
+
+def _strip_accents(text: str) -> str:
+    return "".join(
+        ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch)
+    )
+
+
+def _expand_queries(query: str) -> List[str]:
+    q = query.strip()
+    variants: List[str] = []
+
+    def add(v: str) -> None:
+        v = v.strip()
+        if v and v not in variants:
+            variants.append(v)
+
+    add(q)
+    add(q.replace("-", " "))
+    add(q.replace(" ", "-"))
+
+    translit = cyrtranslit.to_latin(q, "ru")
+    add(translit)
+    add(translit.replace("-", " "))
+    add(_strip_accents(translit))
+
+    parts = re.split(r"\s+", q)
+    if len(parts) > 1:
+        add(parts[-1])
+
+    return variants[:8]
 
 
 class NameResolver:
-    def __init__(self, client: FootballClient) -> None:
+    def __init__(self, client: FotmobClient) -> None:
         self.client = client
         if OpenAI and config.OPENROUTER_API_KEY:
             self._llm = OpenAI(
@@ -30,51 +71,65 @@ class NameResolver:
         else:
             self._llm = None
         self.model = config.OPENROUTER_MODEL
+        self._cache: TTLCache = TTLCache(maxsize=4096, ttl=60 * 60 * 24)
 
     async def resolve(self, query: str) -> Optional[ResolvedPlayer]:
-        """
-        Resolve a user query to a player.
-        Strategy:
-        1. Ask LLM to extract latin player name + team name from query
-        2. Search API-Football with team context (saves API calls)
-        3. Fallback: search across top leagues without team
-        """
-        latin_name, team_hint = await self._extract_name_and_team(query)
-        search_name = latin_name or query
+        cached = self._cache.get(query.lower())
+        if cached:
+            return cached
 
-        result = await self.client.search_player(search_name, team_name=team_hint)
-        if not result:
-            # Try original query if LLM gave a different name
-            if latin_name and latin_name.lower() != query.lower():
-                result = await self.client.search_player(query)
-            if not result:
-                return None
+        candidates: List[Dict] = []
+        queries = _expand_queries(query)
 
-        player = result.get("player", {})
-        stats = result.get("statistics", [])
-        team_name = stats[0]["team"]["name"] if stats else None
-        position = stats[0]["games"]["position"] if stats else None
+        for q in queries:
+            players = await self.client.search_players(q)
+            candidates.extend(players)
 
-        return ResolvedPlayer(
-            player_id=player["id"],
-            name=player.get("name", search_name),
-            team=team_name,
-            position=position,
+        # LLM fallback if nothing found
+        if not candidates and self._llm:
+            guess = await self._guess_latin_name(query)
+            if guess:
+                players = await self.client.search_players(guess)
+                candidates.extend(players)
+
+        if not candidates:
+            return None
+
+        best = self._choose_best(query, candidates)
+        if best is None:
+            return None
+
+        resolved = ResolvedPlayer(
+            player_id=int(best["id"]),
+            name=best["name"],
+            team=best.get("teamName"),
+            score=best["_score"],
         )
+        self._cache[query.lower()] = resolved
+        return resolved
 
-    async def _extract_name_and_team(self, query: str) -> tuple[Optional[str], Optional[str]]:
-        """Use LLM to extract latin player name and team from a query."""
+    def _choose_best(self, query: str, candidates: List[Dict]) -> Optional[Dict]:
+        normalized = _normalize(cyrtranslit.to_latin(query, "ru"))
+        best = None
+        best_score = -1.0
+        for c in candidates:
+            name = c.get("name", "")
+            score = fuzz.WRatio(normalized, _normalize(name))
+            combined = score * 0.7 + (c.get("score", 0) / 400_000) * 30
+            if combined > best_score:
+                best_score = combined
+                best = c
+        if best:
+            best["_score"] = best_score
+        return best
+
+    async def _guess_latin_name(self, query: str) -> Optional[str]:
         if not self._llm:
-            return None, None
-
+            return None
         prompt = (
-            "User is searching for a football player. Extract:\n"
-            "1) Player name in Latin script (transliterate if needed)\n"
-            "2) Team name in English (if mentioned or obvious)\n\n"
-            "Reply EXACTLY in format:\n"
-            "NAME: <player name>\n"
-            "TEAM: <team name or UNKNOWN>\n\n"
-            f"Query: {query}"
+            "Translate this football player query to Latin script name+surname. "
+            "Reply with ONLY the name, nothing else.\n"
+            f"Query: {query!r}"
         )
         try:
             def _call():
@@ -83,17 +138,6 @@ class NameResolver:
                     messages=[{"role": "user", "content": prompt}],
                 )
                 return resp.choices[0].message.content.strip()
-
-            text = await asyncio.to_thread(_call)
-            name = None
-            team = None
-            for line in text.splitlines():
-                if line.upper().startswith("NAME:"):
-                    name = line.split(":", 1)[1].strip()
-                elif line.upper().startswith("TEAM:"):
-                    val = line.split(":", 1)[1].strip()
-                    if val.upper() != "UNKNOWN":
-                        team = val
-            return name, team
+            return await asyncio.to_thread(_call)
         except Exception:
-            return None, None
+            return None

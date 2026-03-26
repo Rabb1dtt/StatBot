@@ -9,9 +9,9 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message
 
 import config
-from football_client import FootballClient
+from fotmob_client import FotmobClient
 from name_resolver import NameResolver
-from stats_formatter import format_player_stats
+from stats_formatter import format_player
 from ai_analyzer import AIAnalyzer
 
 
@@ -69,7 +69,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-async def create_bot() -> tuple[Bot, Dispatcher, FootballClient, NameResolver]:
+async def create_bot() -> tuple[Bot, Dispatcher, FotmobClient, NameResolver]:
     if not config.BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is missing. Add it to .env")
 
@@ -82,7 +82,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, FootballClient, NameResolver]:
     me = await bot.get_me()
     bot_username = (me.username or "").lower()
 
-    fc = FootballClient()
+    fc = FotmobClient()
     await fc.start()
     resolver = NameResolver(fc)
     analyzer = AIAnalyzer()
@@ -90,8 +90,8 @@ async def create_bot() -> tuple[Bot, Dispatcher, FootballClient, NameResolver]:
     @dp.message(CommandStart())
     async def on_start(message: Message) -> None:
         await message.answer(
-            "Привет! Отправь имя футболиста — пришлю статистику за сезон.\n"
-            "Можно на русском или латиницей. Например: Салах, Mbappe, Холанд Сити"
+            "Привет! Отправь имя футболиста — пришлю статистику за текущий сезон.\n"
+            "Можно на русском или латиницей. Например: Салах, Mbappe, Холанд"
         )
 
     @dp.message(F.text)
@@ -108,25 +108,25 @@ async def create_bot() -> tuple[Bot, Dispatcher, FootballClient, NameResolver]:
             resolved = await resolver.resolve(query)
         except Exception as e:
             logger.exception("resolve failed")
-            await message.answer(f"Не получилось найти игрока: {type(e).__name__}: {e}")
+            await message.answer(f"Ошибка поиска: {type(e).__name__}: {e}")
             return
 
         if not resolved:
-            await message.answer("Не нашёл такого игрока. Попробуй уточнить имя или добавить команду.")
+            await message.answer("Не нашёл такого игрока. Попробуй уточнить имя.")
             return
 
         try:
-            player_data = await fc.get_player_by_id(resolved.player_id)
-        except Exception:
-            logger.exception("stat fetch failed")
-            await message.answer("Не удалось получить статистику.")
+            player_data = await fc.get_player(resolved.player_id, resolved.name)
+        except Exception as e:
+            logger.exception("player fetch failed")
+            await message.answer(f"Не удалось получить статистику: {type(e).__name__}: {e}")
             return
 
         if not player_data:
             await message.answer("Статистика не найдена.")
             return
 
-        raw_text = format_player_stats(player_data)
+        raw_text = format_player(player_data)
         final_text = await analyzer.analyze(raw_text)
         if final_text:
             for chunk in split_message(final_text):

@@ -9,154 +9,133 @@ def _fmt(value) -> str:
     return str(value)
 
 
-def _per90(total, minutes: Optional[int]) -> Optional[float]:
-    if total is None or minutes is None or minutes <= 0:
+def _per90(total: float, minutes: Optional[float]) -> Optional[float]:
+    if minutes is None or minutes <= 0:
         return None
-    return float(total) * 90.0 / minutes
+    return total * 90.0 / minutes
 
 
-def format_player_stats(player_data: Dict) -> str:
-    """Format API-Football player response into a readable text block."""
-    player = player_data.get("player", {})
-    statistics = player_data.get("statistics", [])
-
+def format_player(player: Dict) -> str:
+    """Format FotMob player data into readable text."""
     name = player.get("name", "Unknown")
-    firstname = player.get("firstname", "")
-    lastname = player.get("lastname", "")
-    full_name = f"{firstname} {lastname}".strip() or name
-    age = player.get("age")
-    nationality = player.get("nationality")
-    height = player.get("height")
+    position = _get_position(player)
+    team = _get_team(player)
 
     lines: List[str] = []
-    lines.append(f"*{full_name}*")
+
+    header = f"*{name}*"
+    if team:
+        header += f" ({team})"
+    if position:
+        header += f" — {position}"
+    lines.append(header)
+
+    # Player info
+    info = player.get("playerInformation", [])
     info_parts = []
-    if age:
-        info_parts.append(f"{age} лет")
-    if nationality:
-        info_parts.append(nationality)
-    if height:
-        info_parts.append(f"{height} см")
+    for item in info:
+        title = item.get("title", "")
+        val = item.get("value", {})
+        label = val.get("fallback") or val.get("value", "")
+        if title and label:
+            info_parts.append(f"{title}: {label}")
     if info_parts:
-        lines.append(" | ".join(info_parts))
+        lines.append(" | ".join(info_parts[:4]))
     lines.append("")
 
-    total_apps = 0
-    total_goals = 0
-    total_assists = 0
-    total_minutes = 0
-    all_ratings: List[float] = []
+    # Season stats (firstSeasonStats)
+    fss = player.get("firstSeasonStats", {})
+    lines.append(_format_season_stats(fss, player))
 
-    for stat in statistics:
-        team = stat.get("team", {})
-        league = stat.get("league", {})
-        games = stat.get("games", {})
-
-        team_name = team.get("name", "—")
-        league_name = league.get("name", "—")
-        country = league.get("country", "")
-        season_raw = league.get("season", "")
-        season = f"{season_raw}/{int(season_raw)+1}" if season_raw else ""
-
-        apps = games.get("appearences") or 0
-        minutes = games.get("minutes") or 0
-        position = games.get("position", "")
-        rating = games.get("rating")
-
-        goals_data = stat.get("goals", {})
-        goals = goals_data.get("total") or 0
-        assists = goals_data.get("assists") or 0
-
-        total_apps += apps
-        total_goals += goals
-        total_assists += assists
-        total_minutes += minutes
-        if rating:
-            try:
-                all_ratings.append(float(rating))
-            except (ValueError, TypeError):
-                pass
-
-        rating_str = f"{float(rating):.2f}" if rating else "—"
-        lines.append(f"*{league_name}* ({country}, {season}) — {team_name}")
-        lines.append(f"  Позиция: {position}")
-        lines.append(f"  Матчи: {apps} | Минуты: {minutes} | Рейтинг: {rating_str}")
-        lines.append(f"  Голы: {goals} | Ассисты: {assists}")
-
-        # Detailed stats
-        detail_lines = _format_detailed(stat, minutes)
-        if detail_lines:
-            lines.append(detail_lines)
-        lines.append("")
-
-    # Totals
-    avg_rating = f"{sum(all_ratings) / len(all_ratings):.2f}" if all_ratings else "—"
-    lines.append(f"*Итого:* {total_apps} матчей, {total_goals} гол(ов), {total_assists} ассист(ов)")
-    lines.append(f"Минут: {total_minutes} | Средний рейтинг: {avg_rating}")
+    # Tournament breakdown from statSeasons
+    seasons = player.get("statSeasons", [])
+    if seasons:
+        current = seasons[0]
+        season_name = current.get("seasonName", "")
+        tournaments = current.get("tournaments", [])
+        if tournaments:
+            lines.append(f"\n*Сезон {season_name}* — турниры:")
+            for t in tournaments:
+                lines.append(f"  • {t.get('name', '?')}")
 
     return "\n".join(lines)
 
 
-def _format_detailed(stat: Dict, minutes: int) -> str:
-    """Format shots, passes, tackles, etc."""
-    parts: List[str] = []
+def _get_position(player: Dict) -> Optional[str]:
+    pd = player.get("positionDescription", {})
+    if isinstance(pd, str):
+        return pd
+    if isinstance(pd, dict):
+        primary = pd.get("primaryPosition")
+        if isinstance(primary, dict):
+            return primary.get("label")
+        return pd.get("label")
+    return None
 
-    shots = stat.get("shots", {})
-    if shots.get("total"):
-        on = shots.get("on") or 0
-        parts.append(f"Удары: {shots['total']} (в створ: {on})")
 
-    passes = stat.get("passes", {})
-    if passes.get("total"):
-        key = passes.get("key") or 0
-        acc = passes.get("accuracy")
-        acc_str = f", точность {acc}%" if acc else ""
-        parts.append(f"Пасы: {passes['total']} (ключевые: {key}{acc_str})")
+def _get_team(player: Dict) -> Optional[str]:
+    pt = player.get("primaryTeam", {})
+    return pt.get("teamName")
 
-    tackles = stat.get("tackles", {})
-    if tackles.get("total"):
-        interc = tackles.get("interceptions") or 0
-        blocks = tackles.get("blocks") or 0
-        parts.append(f"Отборы: {tackles['total']} | Перехваты: {interc} | Блоки: {blocks}")
 
-    dribbles = stat.get("dribbles", {})
-    if dribbles.get("attempts"):
-        success = dribbles.get("success") or 0
-        parts.append(f"Дриблинг: {success}/{dribbles['attempts']}")
+def _format_season_stats(fss: Dict, player: Dict) -> str:
+    if not fss:
+        return "_Нет расширенной статистики_"
 
-    duels = stat.get("duels", {})
-    if duels.get("total"):
-        won = duels.get("won") or 0
-        parts.append(f"Единоборства: {won}/{duels['total']}")
+    lines: List[str] = []
 
-    fouls = stat.get("fouls", {})
-    if fouls.get("committed"):
-        parts.append(f"Фолы: {fouls['committed']}")
+    # Top stat card
+    top_card = fss.get("topStatCard", {})
+    if top_card:
+        items = top_card.get("items", [])
+        card_parts = []
+        for item in items:
+            title = item.get("title", "")
+            per90 = item.get("per90")
+            total = item.get("statValue")
+            if title:
+                s = f"{title}: {_fmt(total)}"
+                if per90 is not None:
+                    s += f" ({_fmt(per90)}/90)"
+                card_parts.append(s)
+        if card_parts:
+            lines.append("*Ключевые показатели:*")
+            for p in card_parts:
+                lines.append(f"  {p}")
+            lines.append("")
 
-    cards = stat.get("cards", {})
-    yellow = cards.get("yellow") or 0
-    red = cards.get("red") or 0
-    if yellow or red:
-        parts.append(f"Карточки: {yellow}Ж / {red}К")
+    # Stats sections
+    stats_section = fss.get("statsSection")
+    if stats_section and isinstance(stats_section, dict):
+        _format_stats_section(stats_section, lines)
+    elif isinstance(stats_section, list):
+        for section in stats_section:
+            _format_stats_section(section, lines)
 
-    # Per 90 for key metrics
-    if minutes and minutes >= 90:
-        goals = (stat.get("goals", {}).get("total") or 0)
-        assists = (stat.get("goals", {}).get("assists") or 0)
-        per90_parts = []
-        g90 = _per90(goals, minutes)
-        a90 = _per90(assists, minutes)
-        if g90 is not None:
-            per90_parts.append(f"Голы/90: {g90:.2f}")
-        if a90 is not None:
-            per90_parts.append(f"Ассисты/90: {a90:.2f}")
-        shots_total = (stat.get("shots", {}).get("total") or 0)
-        s90 = _per90(shots_total, minutes)
-        if s90 is not None and shots_total > 0:
-            per90_parts.append(f"Удары/90: {s90:.2f}")
-        if per90_parts:
-            parts.append("Per 90: " + " | ".join(per90_parts))
+    if not lines:
+        return "_Нет расширенной статистики_"
+    return "\n".join(lines)
 
-    if not parts:
-        return ""
-    return "  " + "\n  ".join(parts)
+
+def _format_stats_section(section: Dict, lines: List[str]) -> None:
+    title = section.get("title", "")
+    items = section.get("items", [])
+    if not items:
+        return
+
+    if title:
+        lines.append(f"*{title}:*")
+
+    for item in items:
+        label = item.get("title", "")
+        total = item.get("statValue")
+        per90 = item.get("per90")
+        percentile = item.get("percentileRank")
+
+        s = f"  {label}: {_fmt(total)}"
+        if per90 is not None:
+            s += f" ({_fmt(per90)}/90)"
+        if percentile is not None:
+            s += f" [top {100 - int(percentile)}%]"
+        lines.append(s)
+    lines.append("")
