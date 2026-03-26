@@ -1,0 +1,7 @@
+aiogram==3.24.0
+python-dotenv==1.2.1
+httpx==0.28.1
+rapidfuzz==3.14.3
+cyrtranslit==1.2.0
+openai==2.15.0
+cachetools==6.2.5
