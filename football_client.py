@@ -54,8 +54,9 @@ class FootballClient:
             resp = await self._client.get(path, params=params)
             resp.raise_for_status()
             data = resp.json()
-            # Handle rate limiting
-            if data.get("errors", {}).get("rateLimit"):
+            # Handle rate limiting — errors can be dict or list
+            errors = data.get("errors") or {}
+            if isinstance(errors, dict) and errors.get("rateLimit"):
                 await asyncio.sleep(10 * (attempt + 1))
                 continue
             return data
