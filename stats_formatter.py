@@ -55,7 +55,8 @@ def format_player_stats(player_data: Dict) -> str:
         team_name = team.get("name", "—")
         league_name = league.get("name", "—")
         country = league.get("country", "")
-        season = league.get("season", "")
+        season_raw = league.get("season", "")
+        season = f"{season_raw}/{int(season_raw)+1}" if season_raw else ""
 
         apps = games.get("appearences") or 0
         minutes = games.get("minutes") or 0
