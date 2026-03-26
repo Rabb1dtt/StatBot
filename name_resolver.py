@@ -75,8 +75,11 @@ def _expand_queries(query: str) -> List[str]:
 class NameResolver:
     def __init__(self, client: FotmobClient) -> None:
         self.client = client
-        self._openai_client = OpenAI(api_key=config.OPENAI_API_KEY) if config.OPENAI_API_KEY else None
-        self.model = config.OPENAI_MODEL
+        self._openai_client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=config.OPENROUTER_API_KEY,
+        ) if config.OPENROUTER_API_KEY else None
+        self.model = config.OPENROUTER_MODEL
         self._cache: TTLCache = TTLCache(maxsize=4096, ttl=60 * 60 * 24)
 
     async def resolve(self, query: str) -> Optional[ResolvedPlayer]:
@@ -139,11 +142,11 @@ class NameResolver:
             f"Запрос: {query!r}"
         )
         try:
-            resp = self._openai_client.responses.create(
+            resp = self._openai_client.chat.completions.create(
                 model=self.model,
-                input=prompt,
+                messages=[{"role": "user", "content": prompt}],
             )
-            text = resp.output_text.strip()
+            text = resp.choices[0].message.content.strip()
             return text
         except Exception:
             return None
