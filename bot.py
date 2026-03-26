@@ -106,9 +106,9 @@ async def create_bot() -> tuple[Bot, Dispatcher, FootballClient, NameResolver]:
         await message.answer("Ищу игрока, секунду...")
         try:
             resolved = await resolver.resolve(query)
-        except Exception:
+        except Exception as e:
             logger.exception("resolve failed")
-            await message.answer("Не получилось найти игрока. Попробуй ещё раз.")
+            await message.answer(f"Не получилось найти игрока: {type(e).__name__}: {e}")
             return
 
         if not resolved:
