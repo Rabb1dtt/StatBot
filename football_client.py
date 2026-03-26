@@ -50,9 +50,16 @@ class FootballClient:
     async def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict:
         if self._client is None:
             await self.start()
-        resp = await self._client.get(path, params=params)
-        resp.raise_for_status()
-        return resp.json()
+        for attempt in range(3):
+            resp = await self._client.get(path, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+            # Handle rate limiting
+            if data.get("errors", {}).get("rateLimit"):
+                await asyncio.sleep(10 * (attempt + 1))
+                continue
+            return data
+        return data
 
     # ── Search ──────────────────────────────────────────────────────
 
@@ -65,6 +72,7 @@ class FootballClient:
         Otherwise search across top leagues (1 request per league, stops on first hit).
         Returns the first matching player dict with full statistics, or None.
         """
+        # Strategy 1: search by team (most efficient — 2 API calls)
         if team_name:
             team_id = await self._resolve_team(team_name)
             if team_id:
@@ -72,8 +80,8 @@ class FootballClient:
                 if result:
                     return result
 
-        # Fallback: search across top leagues
-        for league_id in TOP_LEAGUE_IDS:
+        # Strategy 2: search top 5 leagues only (save rate limit)
+        for league_id in TOP_LEAGUE_IDS[:5]:
             result = await self._search_in_context(name, season, league=league_id)
             if result:
                 return result
