@@ -265,20 +265,30 @@ class NameResolver:
             return {"type": "single", "names": [query]}
 
         prompt = (
-            "User sent a football query. Determine if they want:\n"
-            "1) Stats for ONE player → type=single\n"
-            "2) COMPARISON of MULTIPLE players (2-5) → type=compare\n\n"
-            "Comparison indicators: 'vs', 'или', 'против', 'сравни', 'compare', "
-            "multiple names separated by comma/dash/и/vs, etc.\n\n"
-            "Reply STRICTLY in this format (no extra text):\n"
-            "TYPE: single\n"
-            "PLAYER1: <name>\n\n"
-            "or for comparison (up to 5 players):\n"
-            "TYPE: compare\n"
-            "PLAYER1: <first player name>\n"
-            "PLAYER2: <second player name>\n"
-            "PLAYER3: <third player name>\n"
-            "(add PLAYER4, PLAYER5 if needed, skip if not)\n\n"
+            "User sent a football query. Determine the type:\n"
+            "1) type=single — stats for ONE player for the season\n"
+            "2) type=compare — COMPARISON of 2-5 players\n"
+            "3) type=match — analysis of a player in SPECIFIC MATCH(ES) vs an opponent\n\n"
+            "For type=match, also extract:\n"
+            "- OPPONENT: team name (or NONE if 'last match')\n"
+            "- TOURNAMENT: tournament filter (e.g. 'Champions League', 'Premier League', 'FA Cup', or ALL)\n"
+            "- COUNT: number of matches to show (e.g. 2, or ALL)\n"
+            "- ALL_TIME: yes if user wants career history, no if current season only\n\n"
+            "Examples:\n"
+            "- 'Хусанов последние 2 матча против Реала в ЛЧ' → match, OPPONENT: Real Madrid, TOURNAMENT: Champions League, COUNT: 2\n"
+            "- 'Фоден против МЮ в лиге' → match, OPPONENT: Manchester United, TOURNAMENT: Premier League, COUNT: ALL\n"
+            "- 'Фоден против МЮ за карьеру' → match, OPPONENT: Manchester United, TOURNAMENT: ALL, COUNT: ALL, ALL_TIME: yes\n"
+            "- 'Салах последний матч' → match, OPPONENT: NONE, COUNT: 1\n"
+            "- 'сравни Салаха и Мбаппе' → compare\n"
+            "- 'Холанд' → single\n\n"
+            "Reply STRICTLY in this format:\n"
+            "TYPE: single|compare|match\n"
+            "PLAYER1: <name>\n"
+            "(PLAYER2: <name> — for compare only)\n"
+            "OPPONENT: <team> or NONE\n"
+            "TOURNAMENT: <name> or ALL\n"
+            "COUNT: <number> or ALL\n"
+            "ALL_TIME: yes or no\n\n"
             f"Query: {query}"
         )
         try:
@@ -292,20 +302,54 @@ class NameResolver:
             text = await asyncio.to_thread(_call)
             qtype = "single"
             names = []
+            opponent = None
+            tournament = None
+            count = None
+            all_time = False
+
             for line in text.splitlines():
                 line = line.strip()
                 if line.upper().startswith("TYPE:"):
                     val = line.split(":", 1)[1].strip().lower()
-                    if val == "compare":
-                        qtype = "compare"
+                    if val in ("compare", "match"):
+                        qtype = val
                 elif re.match(r'^PLAYER\d+:', line, re.IGNORECASE):
                     name = line.split(":", 1)[1].strip()
                     if name:
                         names.append(name)
+                elif line.upper().startswith("OPPONENT:"):
+                    val = line.split(":", 1)[1].strip()
+                    if val.upper() != "NONE":
+                        opponent = val
+                elif line.upper().startswith("TOURNAMENT:"):
+                    val = line.split(":", 1)[1].strip()
+                    if val.upper() != "ALL":
+                        tournament = val
+                elif line.upper().startswith("COUNT:"):
+                    val = line.split(":", 1)[1].strip()
+                    if val.upper() != "ALL":
+                        try:
+                            count = int(val)
+                        except ValueError:
+                            pass
+                elif line.upper().startswith("ALL_TIME:"):
+                    val = line.split(":", 1)[1].strip().lower()
+                    all_time = val in ("yes", "да", "true")
 
-            if names:
-                return {"type": qtype, "names": names, "team_hints": [None] * len(names)}
-            return {"type": "single", "names": [query], "team_hints": [None]}
+            if not names:
+                return {"type": "single", "names": [query], "team_hints": [None]}
+
+            result = {
+                "type": qtype,
+                "names": names,
+                "team_hints": [None] * len(names),
+            }
+            if qtype == "match":
+                result["opponent"] = opponent
+                result["tournament"] = tournament
+                result["count"] = count
+                result["all_time"] = all_time
+            return result
         except Exception:
             return {"type": "single", "names": [query], "team_hints": [None]}
 

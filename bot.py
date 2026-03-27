@@ -241,9 +241,16 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         hints = parsed.get("team_hints", [None] * len(names))
 
         if qtype == "match":
-            opponent = parsed.get("opponent")
             hint = hints[0] if hints else None
-            await _handle_match(message, names[0] if names else query, hint, opponent)
+            await _handle_match(
+                message,
+                names[0] if names else query,
+                hint,
+                opponent=parsed.get("opponent"),
+                tournament_filter=parsed.get("tournament"),
+                count=parsed.get("count"),
+                all_time=parsed.get("all_time", False),
+            )
         elif qtype == "compare" and len(names) >= 2:
             await _handle_compare(message, names[:5], hints[:5])
         else:
@@ -281,8 +288,12 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             for chunk in split_message(raw_text):
                 await message.answer(chunk)
 
-    async def _handle_match(message: Message, name: str, team_hint: str | None, opponent: str | None) -> None:
-        """Analyze a player's performance in a specific match."""
+    async def _handle_match(
+        message: Message, name: str, team_hint: str | None,
+        opponent: str | None = None, tournament_filter: str | None = None,
+        count: int | None = None, all_time: bool = False,
+    ) -> None:
+        """Analyze a player's performance in specific match(es)."""
         resolved = await resolver.resolve(name, team_hint=team_hint)
         if not resolved:
             await message.answer(f"Не нашёл игрока «{name}».")
@@ -295,43 +306,70 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             return
 
         player_id = sofa_player["id"]
-        await message.answer(f"Ищу матч {resolved.name}...")
+        await message.answer(f"Ищу матчи {resolved.name}...")
 
-        # Get recent events
-        events = await sofa.get_player_events(player_id, page=0)
-        if not events:
+        # Determine how many pages to fetch
+        max_pages = 15 if all_time else 3
+
+        # Get events
+        all_events = []
+        for page in range(max_pages):
+            events = await sofa.get_player_events(player_id, page)
+            if not events:
+                break
+            all_events.extend(events)
+
+        if not all_events:
             await message.answer("Не нашёл матчей.")
             return
 
-        # Find matching matches
-        target_events = []
+        # Transliterate opponent name for matching
+        opp_lower = None
         if opponent:
-            # LLM transliterate opponent name
             opp_latin = opponent
             if resolver._llm:
                 guess = await resolver._guess_latin_name(opponent)
                 if guess:
                     opp_latin = guess
             opp_lower = opp_latin.lower()
-            # Also get more pages for older matches
-            all_events = list(events)
-            for page in range(1, 3):
-                more = await sofa.get_player_events(player_id, page)
-                if not more:
-                    break
-                all_events.extend(more)
-            for e in all_events:
-                home = e.get("homeTeam", {}).get("name", "")
-                away = e.get("awayTeam", {}).get("name", "")
-                if opp_lower in home.lower() or opp_lower in away.lower():
-                    target_events.append(e)
-        else:
-            # Last match
-            if events:
-                target_events = [events[0]]
+
+        # Transliterate tournament filter
+        tourney_lower = None
+        if tournament_filter:
+            tourney_lower = tournament_filter.lower()
+
+        # Filter events
+        target_events = []
+        for e in all_events:
+            home = e.get("homeTeam", {}).get("name", "")
+            away = e.get("awayTeam", {}).get("name", "")
+            tourney_name = e.get("tournament", {}).get("uniqueTournament", {}).get("name", "")
+
+            # Filter by opponent
+            if opp_lower:
+                if opp_lower not in home.lower() and opp_lower not in away.lower():
+                    continue
+
+            # Filter by tournament
+            if tourney_lower:
+                if tourney_lower not in tourney_name.lower():
+                    continue
+
+            target_events.append(e)
+
+        # No filters and nothing found → take last match
+        if not target_events and not opponent:
+            target_events = [all_events[0]]
+
+        # Apply count limit
+        if count and count > 0:
+            target_events = target_events[:count]
 
         if not target_events:
-            await message.answer(f"Не нашёл матчей {resolved.name} против «{opponent}».")
+            filter_desc = opponent or "?"
+            if tournament_filter:
+                filter_desc += f" в {tournament_filter}"
+            await message.answer(f"Не нашёл матчей {resolved.name} против «{filter_desc}».")
             return
 
         # Collect stats for all matching matches
