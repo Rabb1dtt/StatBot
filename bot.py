@@ -242,7 +242,13 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         names = parsed["names"]
         hints = parsed.get("team_hints", [None] * len(names))
 
-        if qtype in ("coach", "team"):
+        if qtype == "compare_coaches":
+            await _handle_compare_coaches(
+                message,
+                teams=parsed.get("teams", []),
+                leagues=parsed.get("leagues", []),
+            )
+        elif qtype in ("coach", "team"):
             await _handle_team(
                 message,
                 team_name=parsed.get("team", names[0] if names else query),
@@ -295,6 +301,75 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                 await message.answer(chunk, parse_mode=ParseMode.HTML)
         else:
             for chunk in split_message(raw_text):
+                await message.answer(chunk)
+
+    async def _handle_compare_coaches(message: Message, teams: list[str], leagues: list[str]) -> None:
+        """Compare 2+ coaches by their team stats."""
+        if len(teams) < 2:
+            await message.answer("Нужно минимум 2 команды для сравнения.")
+            return
+
+        await message.answer(f"Сравниваю: {', '.join(teams)}...")
+
+        team_texts = []
+        for i, team_name in enumerate(teams):
+            league = leagues[i] if i < len(leagues) else leagues[0] if leagues else None
+            if not league:
+                await message.answer(f"Не удалось определить лигу для {team_name}.")
+                return
+
+            try:
+                team_data = await team_client.get_team_season(team_name, league)
+            except Exception as e:
+                await message.answer(f"Ошибка для {team_name}: {e}")
+                return
+            if not team_data:
+                await message.answer(f"Не нашёл команду «{team_name}» в {league}.")
+                return
+
+            # SofaScore team stats
+            sofa_team_stats = None
+            try:
+                sofa_search = await sofa._get(f"/search/teams?q={team_name}")
+                if sofa_search:
+                    sofa_teams = sofa_search.get("results", [])
+                    if sofa_teams:
+                        sofa_team_id = sofa_teams[0].get("entity", {}).get("id")
+                        if sofa_team_id:
+                            from team_client import UNDERSTAT_LEAGUES
+                            us_league = UNDERSTAT_LEAGUES.get(league, league)
+                            ut_id = LEAGUE_TOURNAMENT_IDS.get(us_league)
+                            if ut_id:
+                                season_id = await sofa._get_current_season(ut_id)
+                                if season_id:
+                                    data = await sofa._get(
+                                        f"/team/{sofa_team_id}/unique-tournament/{ut_id}/season/{season_id}/statistics/overall"
+                                    )
+                                    if data:
+                                        sofa_team_stats = data.get("statistics", {})
+            except Exception:
+                pass
+
+            standings = None
+            try:
+                from team_client import UNDERSTAT_LEAGUES
+                us_league = UNDERSTAT_LEAGUES.get(league, league)
+                standings = await sofa.get_league_top10(us_league)
+            except Exception:
+                pass
+
+            text = format_team_data(team_data, sofa_team_stats, standings)
+            team_texts.append(text)
+
+        # AI comparison
+        final = await analyzer.compare_coaches(team_texts)
+        if final:
+            result = md_to_html(final)
+            for chunk in split_message(result):
+                await message.answer(chunk, parse_mode=ParseMode.HTML)
+        else:
+            combined = "\n\n".join(f"=== {teams[i]} ===\n{t}" for i, t in enumerate(team_texts))
+            for chunk in split_message(combined):
                 await message.answer(chunk)
 
     async def _handle_team(message: Message, team_name: str, league: str | None, mode: str = "team") -> None:
@@ -494,9 +569,14 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             round_info = ev.get("roundInfo", {})
             round_name = round_info.get("name", round_info.get("round", "?"))
 
+            # Date
+            ts = ev.get("startTimestamp", 0)
+            from datetime import datetime, timezone
+            date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%d.%m.%Y") if ts else "?"
+
             stats = await sofa.get_player_event_stats(event_id, player_id)
             if not stats:
-                all_lines.append(f"*{home} {h_score}-{a_score} {away}* ({tournament} R{round_name}) — нет данных")
+                all_lines.append(f"*{home} {h_score}-{a_score} {away}* ({date_str}, {tournament} R{round_name}) — нет данных")
                 all_lines.append("")
                 continue
 
@@ -504,7 +584,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             rating = stats.get("rating", "—")
 
             all_lines.append(f"*{home} {h_score}-{a_score} {away}*")
-            all_lines.append(f"Турнир: {tournament}, раунд {round_name}")
+            all_lines.append(f"Дата: {date_str} | Турнир: {tournament}, раунд {round_name}")
             all_lines.append(f"Минут: {mins} | Рейтинг: {rating}")
 
             for key, label in stat_labels.items():

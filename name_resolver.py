@@ -324,7 +324,9 @@ class NameResolver:
             "4) coach — user wants to evaluate a COACH's work this season. "
             "Example: 'тренер Ливерпуля', 'оценка Гвардиолы', 'как работает Анчелотти', 'coach Arteta'\n"
             "5) team — user wants TEAM season analysis. "
-            "Example: 'сезон Ливерпуля', 'как играет Арсенал', 'оценка Реала', 'команда Барселона'\n\n"
+            "Example: 'сезон Ливерпуля', 'как играет Арсенал', 'оценка Реала', 'команда Барселона'\n"
+            "6) compare_coaches — user wants to COMPARE 2+ coaches/teams. "
+            "Example: 'сравни тренеров Ливерпуля и Арсенала', 'Гвардиола vs Артета', 'Арсенал vs Ливерпуль сезон'\n\n"
 
             "RULES FOR PLAYER NAMES:\n"
             "- Extract the actual player name, removing qualifiers like 'последние 2 матча', 'в лиге' etc.\n"
@@ -356,10 +358,13 @@ class NameResolver:
             "- 'как работает Слот' → TYPE: coach, TEAM: Liverpool, LEAGUE: Premier League\n"
             "- 'сезон Арсенала' → TYPE: team, TEAM: Arsenal, LEAGUE: Premier League\n"
             "- 'как играет Барселона' → TYPE: team, TEAM: Barcelona, LEAGUE: LaLiga\n"
-            "- 'Реал Мадрид сезон' → TYPE: team, TEAM: Real Madrid, LEAGUE: LaLiga\n\n"
+            "- 'Реал Мадрид сезон' → TYPE: team, TEAM: Real Madrid, LEAGUE: LaLiga\n"
+            "- 'сравни тренеров Ливерпуля и Арсенала' → TYPE: compare_coaches, TEAM: Liverpool, LEAGUE: Premier League, TEAM2: Arsenal, LEAGUE2: Premier League\n"
+            "- 'Гвардиола vs Артета' → TYPE: compare_coaches, TEAM: Manchester City, LEAGUE: Premier League, TEAM2: Arsenal, LEAGUE2: Premier League\n"
+            "- 'Арсенал vs Ливерпуль сезон' → TYPE: compare_coaches, TEAM: Arsenal, LEAGUE: Premier League, TEAM2: Liverpool, LEAGUE2: Premier League\n\n"
 
             "Reply STRICTLY in this format (one field per line, no extra text):\n"
-            "TYPE: single|compare|match|coach|team\n"
+            "TYPE: single|compare|match|coach|team|compare_coaches\n"
             "PLAYER1: <name in Latin> (for single/compare/match)\n"
             "TEAM_HINT1: <team or NONE>\n"
             "PLAYER2: <name or skip>\n"
@@ -369,8 +374,10 @@ class NameResolver:
             "TOURNAMENT: <name or ALL> (for match)\n"
             "COUNT: <number or ALL> (for match)\n"
             "ALL_TIME: yes|no (for match)\n"
-            "TEAM: <team name in English> (for coach/team)\n"
-            "LEAGUE: <league name> (for coach/team)\n\n"
+            "TEAM: <team name in English> (for coach/team/compare_coaches)\n"
+            "LEAGUE: <league name> (for coach/team/compare_coaches)\n"
+            "TEAM2: <second team> (for compare_coaches)\n"
+            "LEAGUE2: <second league> (for compare_coaches)\n\n"
             f"Query: {query}"
         )
         try:
@@ -404,7 +411,7 @@ class NameResolver:
 
                 if key == "TYPE":
                     v = val.lower()
-                    if v in ("compare", "match", "single", "coach", "team"):
+                    if v in ("compare", "match", "single", "coach", "team", "compare_coaches"):
                         qtype = v
                 elif re.match(r'^PLAYER\d+$', key):
                     if val and val.upper() != "NONE":
@@ -432,6 +439,28 @@ class NameResolver:
                 elif key == "LEAGUE":
                     if val and val.upper() != "NONE":
                         league_name = val
+                elif key == "TEAM2":
+                    if val and val.upper() != "NONE":
+                        if "teams" not in locals():
+                            teams = []
+                        teams.append(val)
+                elif key == "LEAGUE2":
+                    if val and val.upper() != "NONE":
+                        if "leagues" not in locals():
+                            leagues = []
+                        leagues.append(val)
+
+            # Compare coaches/teams
+            if qtype == "compare_coaches" and team_name:
+                team_list = [team_name] + (teams if "teams" in locals() else [])
+                league_list = [league_name] + (leagues if "leagues" in locals() else [])
+                return {
+                    "type": "compare_coaches",
+                    "names": team_list,
+                    "team_hints": [None] * len(team_list),
+                    "teams": team_list,
+                    "leagues": league_list,
+                }
 
             # Coach/team queries
             if qtype in ("coach", "team") and team_name:
