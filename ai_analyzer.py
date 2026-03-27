@@ -340,7 +340,7 @@ class AIAnalyzer:
             )
         else:
             self.client = None
-        self.model = config.OPENROUTER_MODEL
+        self.model = config.MODEL_ANALYSIS
 
     async def analyze(self, raw_text: str) -> Optional[str]:
         if not self.client:

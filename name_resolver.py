@@ -52,7 +52,8 @@ class NameResolver:
             )
         else:
             self._llm = None
-        self.model = config.OPENROUTER_MODEL
+        self.model_translate = config.MODEL_TRANSLATE
+        self.model_orchestrator = config.MODEL_ORCHESTRATOR
 
     def rebuild_index(self) -> None:
         """Reload players from DB into memory for fast search."""
@@ -348,7 +349,7 @@ class NameResolver:
         try:
             def _call():
                 resp = self._llm.chat.completions.create(
-                    model=self.model,
+                    model=self.model_orchestrator,
                     messages=[{"role": "user", "content": prompt}],
                 )
                 return resp.choices[0].message.content.strip()
@@ -427,7 +428,7 @@ class NameResolver:
         try:
             def _call():
                 resp = self._llm.chat.completions.create(
-                    model=self.model,
+                    model=self.model_translate,
                     messages=[{"role": "user", "content": prompt}],
                 )
                 return resp.choices[0].message.content.strip()
