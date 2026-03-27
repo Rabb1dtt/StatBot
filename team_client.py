@@ -34,23 +34,62 @@ class TeamDataClient:
             return usc.league(league=us_league).get_team_data(season=season)
 
     async def get_team_season(self, team_name: str, league: str, season: str = "2025", coach_since: Optional[str] = None, coach_until: Optional[str] = None) -> Optional[Dict]:
-        """Get a specific team's season data with aggregated stats."""
-        cache_key = f"{league}:{season}"
-        cached = self._cache.get(cache_key)
-        if not cached:
-            cached = await asyncio.to_thread(self._get_team_data_sync, league, season)
-            self._cache[cache_key] = cached
+        """Get a specific team's season data with aggregated stats.
+        If coach_since is before the current season, fetches multiple seasons.
+        """
+        # Determine which seasons to fetch
+        current = int(season)
+        seasons_to_fetch = [season]
 
-        if not cached:
+        if coach_since:
+            # coach_since is YYYY-MM-DD. Season "2025" starts ~Aug 2025.
+            # If coach started before Aug of current season, need previous season too.
+            since_year = int(coach_since[:4])
+            since_month = int(coach_since[5:7]) if len(coach_since) >= 7 else 1
+            # Season N starts ~Aug N, so if coach started before Aug of current season year
+            for yr in range(since_year, current + 1):
+                s = str(yr)
+                if s not in seasons_to_fetch:
+                    seasons_to_fetch.append(s)
+            # Also check if started mid-previous-season (before Aug)
+            if since_month < 8 and str(since_year - 1) not in seasons_to_fetch:
+                seasons_to_fetch.append(str(since_year - 1))
+
+        seasons_to_fetch.sort()
+
+        # Fetch and merge all histories
+        all_history = []
+        team_title = None
+        team_id = None
+
+        for s in seasons_to_fetch:
+            cache_key = f"{league}:{s}"
+            cached = self._cache.get(cache_key)
+            if not cached:
+                try:
+                    cached = await asyncio.to_thread(self._get_team_data_sync, league, s)
+                    self._cache[cache_key] = cached
+                except Exception:
+                    continue
+
+            if not cached:
+                continue
+
+            target = team_name.lower()
+            for tid, tdata in cached.items():
+                if target in tdata.get("title", "").lower():
+                    if not team_title:
+                        team_title = tdata.get("title")
+                        team_id = tdata.get("id")
+                    all_history.extend(tdata.get("history", []))
+                    break
+
+        if not all_history:
             return None
 
-        # Find team by name (fuzzy)
-        target = team_name.lower()
-        for tid, tdata in cached.items():
-            if target in tdata.get("title", "").lower():
-                return self._aggregate(tdata, since_date=coach_since, until_date=coach_until)
-
-        return None
+        # Build a merged tdata
+        merged = {"title": team_title, "id": team_id, "history": all_history}
+        return self._aggregate(merged, since_date=coach_since, until_date=coach_until)
 
     def _aggregate(self, tdata: Dict, since_date: Optional[str] = None, until_date: Optional[str] = None) -> Dict:
         """Aggregate per-match data into season summary.
@@ -168,6 +207,7 @@ def format_team_data(team: Dict, sofa_team_stats: Optional[Dict] = None, standin
             current_mgr = manager.get("name", "") if manager else ""
             if current_mgr and mgr_display and current_mgr.lower() != mgr_display.lower():
                 coach_line += f" | ЗАМЕНЁН на {current_mgr}"
+                coach_line += "\n⚠️ ВНИМАНИЕ: точная дата ухода неизвестна. Данные могут включать матчи уже при новом тренере. Последние матчи в выборке могут быть не при этом тренере."
         lines.append(coach_line)
 
     # Evaluation period
