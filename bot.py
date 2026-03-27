@@ -399,6 +399,9 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                 break
             all_events.extend(events)
 
+        # Sort all by date descending (most recent first)
+        all_events.sort(key=lambda e: e.get("startTimestamp", 0), reverse=True)
+
         if not all_events:
             await message.answer("Не нашёл матчей.")
             return

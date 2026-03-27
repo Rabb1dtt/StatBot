@@ -208,11 +208,14 @@ class SofascoreClient:
         return data.get("statistics", {})
 
     async def get_player_events(self, player_id: int, page: int = 0) -> List[Dict]:
-        """Get recent events (matches) for a player. Page 0 = most recent."""
+        """Get recent events (matches) for a player, sorted by date descending."""
         data = await self._get(f"/player/{player_id}/events/last/{page}")
         if not data:
             return []
-        return data.get("events", [])
+        events = data.get("events", [])
+        # SofaScore doesn't guarantee date order — sort by timestamp desc
+        events.sort(key=lambda e: e.get("startTimestamp", 0), reverse=True)
+        return events
 
     async def get_player_event_stats(self, event_id: int, player_id: int) -> Optional[Dict]:
         """Get per-match stats for a specific player in a specific event."""
