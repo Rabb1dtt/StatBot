@@ -108,3 +108,105 @@ def format_player_stats(name: str, team: str, league: str, position: str, stats:
         lines.append(f"*Дисциплина:* ЖК: {yellow} | КК: {red}")
 
     return "\n".join(lines)
+
+
+def format_match_breakdown(team: str, matches: List[Dict], season: str = "2025") -> str:
+    """Format per-opponent breakdown from match data for AI analysis."""
+    # Filter to current season
+    season_matches = [m for m in matches if str(m.get("season")) == season]
+    if not season_matches:
+        return ""
+
+    # Aggregate per opponent
+    opponents: Dict[str, Dict] = {}
+    for m in season_matches:
+        h_team = m.get("h_team", "")
+        a_team = m.get("a_team", "")
+        opponent = a_team if h_team == team else h_team
+        is_home = h_team == team
+
+        if opponent not in opponents:
+            opponents[opponent] = {
+                "matches": 0, "goals": 0, "assists": 0,
+                "xG": 0.0, "xA": 0.0, "shots": 0, "minutes": 0,
+                "key_passes": 0, "wins": 0, "draws": 0, "losses": 0,
+            }
+        o = opponents[opponent]
+        o["matches"] += 1
+        o["goals"] += int(m.get("goals", 0))
+        o["assists"] += int(m.get("assists", 0))
+        o["shots"] += int(m.get("shots", 0))
+        o["minutes"] += int(m.get("time", 0))
+        o["key_passes"] += int(m.get("key_passes", 0))
+        try:
+            o["xG"] += float(m.get("xG", 0))
+            o["xA"] += float(m.get("xA", 0))
+        except (ValueError, TypeError):
+            pass
+
+        h_goals = int(m.get("h_goals", 0))
+        a_goals = int(m.get("a_goals", 0))
+        if is_home:
+            team_goals, opp_goals = h_goals, a_goals
+        else:
+            team_goals, opp_goals = a_goals, h_goals
+        if team_goals > opp_goals:
+            o["wins"] += 1
+        elif team_goals == opp_goals:
+            o["draws"] += 1
+        else:
+            o["losses"] += 1
+
+    # Sort by opponent goals+assists (productive matches first)
+    sorted_opps = sorted(
+        opponents.items(),
+        key=lambda x: x[1]["goals"] + x[1]["assists"],
+        reverse=True,
+    )
+
+    lines: List[str] = []
+    lines.append("*Разбивка по соперникам (текущий сезон, только лига):*")
+    lines.append("Соперник | Матчи | Голы | Ассисты | xG | xA | Удары | Результат")
+
+    productive_goals = 0
+    productive_opps = 0
+    quiet_goals = 0
+    quiet_opps = 0
+
+    for opp, s in sorted_opps:
+        wdl = f"{s['wins']}W-{s['draws']}D-{s['losses']}L"
+        lines.append(
+            f"  {opp}: {s['matches']}м | {s['goals']}г {s['assists']}а | "
+            f"xG {_fmt(s['xG'])} xA {_fmt(s['xA'])} | {s['shots']}уд | {wdl}"
+        )
+        ga = s["goals"] + s["assists"]
+        if ga > 0:
+            productive_goals += s["goals"]
+            productive_opps += 1
+        else:
+            quiet_goals += 0
+            quiet_opps += 1
+
+    # Summary for AI
+    lines.append("")
+    total_opps = len(opponents)
+    lines.append(f"Голевые действия против {productive_opps} из {total_opps} соперников")
+    lines.append(f"Без голевых действий против {quiet_opps} соперников")
+
+    # Last 5 matches form
+    recent = season_matches[:5]
+    if recent:
+        lines.append("")
+        lines.append("*Форма (последние 5 матчей):*")
+        for m in recent:
+            h_team = m.get("h_team", "")
+            a_team = m.get("a_team", "")
+            opp = a_team if h_team == team else h_team
+            venue = "Д" if h_team == team else "В"
+            score = f"{m.get('h_goals')}-{m.get('a_goals')}"
+            lines.append(
+                f"  {m.get('date')} ({venue}) vs {opp} {score} — "
+                f"{m.get('goals')}г {m.get('assists')}а, xG {_fmt(m.get('xG'))} xA {_fmt(m.get('xA'))}"
+            )
+
+    return "\n".join(lines)

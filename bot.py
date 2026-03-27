@@ -13,7 +13,7 @@ from database import PlayerDB
 from understat_sync import sync_player_ids_async
 from understat_client import UnderstatPlayerClient
 from name_resolver import NameResolver
-from stats_formatter import format_player_stats
+from stats_formatter import format_player_stats, format_match_breakdown
 from ai_analyzer import AIAnalyzer
 
 
@@ -126,6 +126,16 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             position=resolved.position,
             stats=season,
         )
+
+        # Add per-opponent breakdown
+        try:
+            matches = await usc.get_match_stats(resolved.understat_id)
+            breakdown = format_match_breakdown(resolved.team, matches, season.get("season", "2025"))
+            if breakdown:
+                text += "\n\n" + breakdown
+        except Exception:
+            logger.exception("match breakdown failed")
+
         return text, None
 
     @dp.message(F.text)
