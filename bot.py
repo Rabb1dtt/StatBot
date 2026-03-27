@@ -316,6 +316,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
 
         sofa_team_stats = None
         manager = None
+        sofa_team_id = None
         try:
             sofa_search = await sofa._get(f"/search/teams?q={team_name}")
             if sofa_search:
@@ -351,7 +352,71 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         except Exception:
             pass
 
-        text = format_team_data(team_data, sofa_team_stats, standings, manager, coach_name, coach_since)
+        # Cup/European results from SofaScore team events
+        cup_results = []
+        try:
+            if sofa_team_id:
+                team_events = await sofa.get_team_events(sofa_team_id, max_pages=3)
+                league_tid = LEAGUE_TOURNAMENT_IDS.get(
+                    UNDERSTAT_LEAGUES.get(league, league) if league else ""
+                )
+                from datetime import datetime, timezone
+                for e in team_events:
+                    tid = e.get("tournament", {}).get("uniqueTournament", {}).get("id")
+                    # Skip league matches (already in Understat data)
+                    if tid == league_tid:
+                        continue
+                    # Filter by coach_since date
+                    ts = e.get("startTimestamp", 0)
+                    if coach_since and ts:
+                        match_date = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                        if match_date < coach_since:
+                            continue
+
+                    home = e.get("homeTeam", {}).get("name", "?")
+                    away = e.get("awayTeam", {}).get("name", "?")
+                    hs = e.get("homeScore", {}).get("current", 0)
+                    aws = e.get("awayScore", {}).get("current", 0)
+                    tname = e.get("tournament", {}).get("uniqueTournament", {}).get("name", "?")
+                    rinfo = e.get("roundInfo", {})
+                    rname = rinfo.get("name", rinfo.get("round", ""))
+
+                    # Determine result
+                    is_home = team_name.lower() in home.lower()
+                    gf = hs if is_home else aws
+                    ga = aws if is_home else hs
+                    if gf > ga:
+                        result = "w"
+                    elif gf == ga:
+                        result = "d"
+                    else:
+                        result = "l"
+
+                    # Stage tag
+                    stage = ""
+                    rn = str(rname).lower()
+                    if any(k in rn for k in ["final"]):
+                        stage = "ФИНАЛ" if "semi" not in rn else "ПОЛУФИНАЛ"
+                    elif "semi" in rn:
+                        stage = "ПОЛУФИНАЛ"
+                    elif "quarter" in rn:
+                        stage = "ЧЕТВЕРТЬФИНАЛ"
+
+                    cup_results.append({
+                        "tournament": tname,
+                        "round": str(rname),
+                        "stage": stage,
+                        "home": home,
+                        "away": away,
+                        "score": f"{hs}-{aws}",
+                        "goals_for": gf,
+                        "goals_against": ga,
+                        "result": result,
+                    })
+        except Exception:
+            logger.exception("cup results fetch failed")
+
+        text = format_team_data(team_data, sofa_team_stats, standings, manager, coach_name, coach_since, cup_results)
         return text, None
 
     async def _handle_compare_coaches(message: Message, teams: list[str], leagues: list[str]) -> None:

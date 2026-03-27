@@ -219,6 +219,20 @@ class SofascoreClient:
                 })
         return result
 
+    async def get_team_events(self, team_id: int, max_pages: int = 3) -> List[Dict]:
+        """Get recent events for a team, sorted by date desc."""
+        all_events = []
+        for page in range(max_pages):
+            data = await self._get(f"/team/{team_id}/events/last/{page}")
+            if not data:
+                break
+            events = data.get("events", [])
+            if not events:
+                break
+            all_events.extend(events)
+        all_events.sort(key=lambda e: e.get("startTimestamp", 0), reverse=True)
+        return all_events
+
     async def get_player_tournament_aggregate(
         self, player_id: int, tournament_id: int, season_id: int,
     ) -> Optional[Dict]:

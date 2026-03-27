@@ -134,7 +134,7 @@ class TeamDataClient:
         }
 
 
-def format_team_data(team: Dict, sofa_team_stats: Optional[Dict] = None, standings: Optional[str] = None, manager: Optional[Dict] = None, coach_name: Optional[str] = None, coach_since: Optional[str] = None) -> str:
+def format_team_data(team: Dict, sofa_team_stats: Optional[Dict] = None, standings: Optional[str] = None, manager: Optional[Dict] = None, coach_name: Optional[str] = None, coach_since: Optional[str] = None, cup_results: Optional[List[Dict]] = None) -> str:
     """Format team data for AI analysis."""
     lines = []
     title = team.get("title", "?")
@@ -254,6 +254,29 @@ def format_team_data(team: Dict, sofa_team_stats: Optional[Dict] = None, standin
                 f"  {m['date']} ({venue}) {m['scored']}-{m['missed']} [{res}] "
                 f"xG {m['xG']} xGA {m['xGA']} PPDA {m['ppda']}"
             )
+        lines.append("")
+
+    # Cup/European results
+    if cup_results:
+        lines.append("*Кубки и еврокубки:*")
+        # Group by tournament
+        by_tourney: Dict[str, List] = {}
+        for m in cup_results:
+            t = m.get("tournament", "?")
+            by_tourney.setdefault(t, []).append(m)
+
+        for tourney, matches in by_tourney.items():
+            wins = sum(1 for m in matches if m.get("result") == "w")
+            draws = sum(1 for m in matches if m.get("result") == "d")
+            losses = sum(1 for m in matches if m.get("result") == "l")
+            gf = sum(m.get("goals_for", 0) for m in matches)
+            ga = sum(m.get("goals_against", 0) for m in matches)
+            lines.append(f"  {tourney}: {len(matches)}м {wins}W {draws}D {losses}L ({gf}-{ga})")
+            # Show knockout stages
+            for m in matches:
+                stage = m.get("stage", "")
+                if stage:
+                    lines.append(f"    {stage}: {m.get('home')} {m.get('score')} {m.get('away')}")
         lines.append("")
 
     # Standings
