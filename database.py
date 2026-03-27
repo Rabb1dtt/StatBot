@@ -1,3 +1,4 @@
+import html as html_mod
 import logging
 import sqlite3
 import time
@@ -51,7 +52,7 @@ class PlayerDB:
     def upsert_players(self, players: List[Dict], league: str) -> int:
         rows = []
         for p in players:
-            name = p.get("player_name", "")
+            name = html_mod.unescape(p.get("player_name", ""))
             rows.append((
                 int(p["id"]),
                 name,

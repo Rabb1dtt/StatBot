@@ -129,6 +129,7 @@ class NameResolver:
         """Resolve a player name query to a ResolvedPlayer.
         Always uses LLM first for transliteration, then fuzzy search.
         """
+        MIN_SCORE = 55
         best = None
 
         # 1) LLM transliteration first — handles Cyrillic, nicknames, unusual names
@@ -145,7 +146,7 @@ class NameResolver:
             if not best or direct_best[0] > best[0]:
                 best = direct_best
 
-        if best:
+        if best and best[0] >= MIN_SCORE:
             return self._to_resolved(*best)
         return None
 
