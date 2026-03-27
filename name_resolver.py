@@ -136,16 +136,18 @@ class NameResolver:
         prompt = (
             "User sent a football query. Determine if they want:\n"
             "1) Stats for ONE player → type=single\n"
-            "2) COMPARISON of TWO players → type=compare\n\n"
+            "2) COMPARISON of MULTIPLE players (2-5) → type=compare\n\n"
             "Comparison indicators: 'vs', 'или', 'против', 'сравни', 'compare', "
-            "two names separated by comma/dash/и, etc.\n\n"
+            "multiple names separated by comma/dash/и/vs, etc.\n\n"
             "Reply STRICTLY in this format (no extra text):\n"
             "TYPE: single\n"
-            "PLAYER1: <name as written by user>\n\n"
-            "or for comparison:\n"
+            "PLAYER1: <name>\n\n"
+            "or for comparison (up to 5 players):\n"
             "TYPE: compare\n"
             "PLAYER1: <first player name>\n"
-            "PLAYER2: <second player name>\n\n"
+            "PLAYER2: <second player name>\n"
+            "PLAYER3: <third player name>\n"
+            "(add PLAYER4, PLAYER5 if needed, skip if not)\n\n"
             f"Query: {query}"
         )
         try:
@@ -165,10 +167,10 @@ class NameResolver:
                     val = line.split(":", 1)[1].strip().lower()
                     if val == "compare":
                         qtype = "compare"
-                elif line.upper().startswith("PLAYER1:"):
-                    names.append(line.split(":", 1)[1].strip())
-                elif line.upper().startswith("PLAYER2:"):
-                    names.append(line.split(":", 1)[1].strip())
+                elif re.match(r'^PLAYER\d+:', line, re.IGNORECASE):
+                    name = line.split(":", 1)[1].strip()
+                    if name:
+                        names.append(name)
 
             if names:
                 return {"type": qtype, "names": names}

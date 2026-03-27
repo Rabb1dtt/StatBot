@@ -208,7 +208,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         names = parsed["names"]
 
         if qtype == "compare" and len(names) >= 2:
-            await _handle_compare(message, names[0], names[1])
+            await _handle_compare(message, names[:5])
         else:
             await _handle_single(message, names[0] if names else query)
 
@@ -243,31 +243,31 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             for chunk in split_message(raw_text):
                 await message.answer(chunk)
 
-    async def _handle_compare(message: Message, name1: str, name2: str) -> None:
-        await message.answer(f"Ищу {name1} и {name2}...")
+    async def _handle_compare(message: Message, names: list[str]) -> None:
+        await message.answer(f"Ищу {', '.join(names)}...")
 
-        try:
-            text1, err1 = await _fetch_stats(name1)
-            text2, err2 = await _fetch_stats(name2)
-        except Exception as e:
-            logger.exception("compare fetch failed")
-            await message.answer(f"Ошибка: {type(e).__name__}: {e}")
-            return
+        player_texts: list[str] = []
+        for name in names:
+            try:
+                text, err = await _fetch_stats(name)
+            except Exception as e:
+                logger.exception("compare fetch failed for %s", name)
+                await message.answer(f"Ошибка для {name}: {type(e).__name__}: {e}")
+                return
+            if err:
+                await message.answer(err)
+                return
+            player_texts.append(text)
 
-        if err1:
-            await message.answer(err1)
-            return
-        if err2:
-            await message.answer(err2)
-            return
-
-        final_text = await analyzer.compare(text1, text2)
+        final_text = await analyzer.compare(player_texts)
         if final_text:
             result = md_to_html(final_text)
             for chunk in split_message(result):
                 await message.answer(chunk, parse_mode=ParseMode.HTML)
         else:
-            combined = f"=== ИГРОК 1 ===\n{text1}\n\n=== ИГРОК 2 ===\n{text2}"
+            combined = "\n\n".join(
+                f"=== ИГРОК {i+1} ===\n{t}" for i, t in enumerate(player_texts)
+            )
             for chunk in split_message(combined):
                 await message.answer(chunk)
 
