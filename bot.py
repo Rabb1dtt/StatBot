@@ -14,6 +14,7 @@ from understat_sync import sync_player_ids_async
 from understat_client import UnderstatPlayerClient
 from name_resolver import NameResolver
 from stats_formatter import format_player_stats, format_match_breakdown
+from sofascore_client import SofascoreClient, format_sofascore_extra
 from ai_analyzer import AIAnalyzer
 
 
@@ -96,6 +97,8 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
 
     # Components
     usc = UnderstatPlayerClient()
+    sofa = SofascoreClient()
+    await sofa.start()
     resolver = NameResolver(db)
     resolver.rebuild_index()
     analyzer = AIAnalyzer()
@@ -135,6 +138,15 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                 text += "\n\n" + breakdown
         except Exception:
             logger.exception("match breakdown failed")
+
+        # Add SofaScore dribbling/duels data
+        try:
+            sofa_stats = await sofa.get_player_stats(resolved.name, resolved.league)
+            extra = format_sofascore_extra(sofa_stats) if sofa_stats else ""
+            if extra:
+                text += "\n\n" + extra
+        except Exception:
+            logger.exception("sofascore fetch failed")
 
         return text, None
 

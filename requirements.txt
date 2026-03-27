@@ -5,3 +5,4 @@ cyrtranslit==1.2.0
 openai==2.15.0
 cachetools==6.2.5
 understatapi==0.7.1
+httpx==0.28.1
