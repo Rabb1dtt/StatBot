@@ -151,51 +151,105 @@ class NameResolver:
         return None
 
     def _try_match_query(self, query: str) -> Optional[dict]:
-        """Detect match analysis queries like 'Салах против Реала' or 'Мбаппе последний матч'."""
+        """Detect match analysis queries with optional filters (all regex, no LLM needed)."""
         q = query.strip()
+        ql = q.lower()
 
-        # "Салах последний матч" / "Мбаппе last match" / "Холанд вчера"
-        last_match = re.match(
-            r'^(.+?)\s+(?:последний матч|last match|вчера|yesterday|сегодня|today)$',
-            q, flags=re.IGNORECASE,
-        )
-        if last_match:
-            return {
-                "type": "match",
-                "names": [self._clean_name(last_match.group(1))],
-                "team_hints": [self._extract_team_hint(last_match.group(1))],
-                "opponent": None,
-            }
+        # Match indicators: "против" in non-comparison context, "последний матч", "матч", "как сыграл"
+        is_match_query = False
 
-        # "как сыграл Салах против Реала" / "Салах против Арсенала" / "Мбаппе vs Барселона матч"
-        vs_match = re.match(
-            r'^(?:как\s+(?:сыграл|играл)\s+)?(.+?)\s+(?:против|vs\.?|versus)\s+(.+?)(?:\s+(?:матч|match))?$',
-            q, flags=re.IGNORECASE,
-        )
+        # "как сыграл/играл X" prefix → definitely a match query
+        if re.match(r'^как\s+(?:сыграл|играл)', ql):
+            is_match_query = True
+
+        # "X последний матч" / "X вчера"
+        if re.search(r'(?:последний матч|last match|вчера|yesterday|сегодня|today)$', ql):
+            is_match_query = True
+
+        # Contains filter words that only make sense for match queries
+        match_filters = ['в лиге', 'в лч', 'в кубке', 'в ла лиге', 'в серии',
+                         'в бундеслиге', 'в лиге 1', 'в рпл', 'в апл',
+                         'в лиге чемпионов', 'в лиге европы', 'champions league',
+                         'premier league', 'за карьеру', 'за все время', 'all time',
+                         'последние', 'первый круг', 'второй круг',
+                         'в fa cup', 'в кубке англии', 'в кубке испании']
+        for f in match_filters:
+            if f in ql:
+                is_match_query = True
+                break
+
+        # "X против Y" where Y looks like a team (not a player comparison)
+        # If "сравни" is NOT present and "против" IS present → likely match
+        if 'против' in ql and 'сравни' not in ql and 'сравнить' not in ql:
+            # But only if no other comparison markers (vs between two player-like names with "и")
+            if not re.search(r'\s+и\s+.+\s+против\s+', ql):
+                is_match_query = True
+
+        if not is_match_query:
+            return None
+
+        # === Extract parameters ===
+        # Remove prefixes
+        cleaned = re.sub(r'^(?:как\s+(?:сыграл|играл)\s+)', '', q, flags=re.IGNORECASE).strip()
+
+        # Extract count: "последние N матч(ей/а)"
+        count = None
+        count_match = re.search(r'последни[ех]\s+(\d+)\s+(?:матч|игр)', cleaned, flags=re.IGNORECASE)
+        if count_match:
+            count = int(count_match.group(1))
+            cleaned = cleaned[:count_match.start()] + cleaned[count_match.end():]
+
+        # Extract all_time
+        all_time = False
+        if re.search(r'за\s+(?:карьеру|все\s+время|всю\s+карьеру)|all\s+time', cleaned, flags=re.IGNORECASE):
+            all_time = True
+            cleaned = re.sub(r'за\s+(?:карьеру|все\s+время|всю\s+карьеру)|all\s+time', '', cleaned, flags=re.IGNORECASE)
+
+        # Extract tournament filter
+        tournament = None
+        tourney_patterns = {
+            r'в\s+(?:лч|лиге\s+чемпионов|champions\s+league)': 'Champions League',
+            r'в\s+(?:ле|лиге\s+европы|europa\s+league)': 'Europa League',
+            r'в\s+(?:апл|премьер[\s-]лиге|premier\s+league)': 'Premier League',
+            r'в\s+(?:ла\s+лиге|la\s+liga)': 'LaLiga',
+            r'в\s+(?:серии\s+а|serie\s+a)': 'Serie A',
+            r'в\s+(?:бундеслиге|bundesliga)': 'Bundesliga',
+            r'в\s+(?:лиге\s+1|ligue\s+1)': 'Ligue 1',
+            r'в\s+(?:рпл)': 'Premier League',  # Russian PL
+            r'в\s+(?:кубке\s+англии|fa\s+cup)': 'FA Cup',
+            r'в\s+(?:кубке|кубке\s+лиги|carabao)': 'EFL Cup',
+            r'в\s+лиге(?!\s+(?:чемпионов|европы))': 'league',  # generic "в лиге"
+        }
+        for pattern, name in tourney_patterns.items():
+            if re.search(pattern, cleaned, flags=re.IGNORECASE):
+                tournament = name
+                cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+                break
+
+        # Extract opponent: "против X"
+        opponent = None
+        vs_match = re.search(r'(?:против|vs\.?|versus)\s+(.+?)(?:\s*$)', cleaned, flags=re.IGNORECASE)
         if vs_match:
-            player_raw = vs_match.group(1).strip()
-            opponent = vs_match.group(2).strip()
-            return {
-                "type": "match",
-                "names": [self._clean_name(player_raw)],
-                "team_hints": [self._extract_team_hint(player_raw)],
-                "opponent": opponent,
-            }
+            opponent = vs_match.group(1).strip()
+            cleaned = cleaned[:vs_match.start()]
 
-        # "матч Салах Реал" / "match Mbappe Barcelona"
-        match_prefix = re.match(
-            r'^(?:матч|match)\s+(.+?)\s+(?:против|vs\.?|versus|—|-)\s+(.+)$',
-            q, flags=re.IGNORECASE,
-        )
-        if match_prefix:
-            return {
-                "type": "match",
-                "names": [self._clean_name(match_prefix.group(1))],
-                "team_hints": [self._extract_team_hint(match_prefix.group(1))],
-                "opponent": match_prefix.group(2).strip(),
-            }
+        # Remove "последний матч" / "вчера"
+        cleaned = re.sub(r'\s*(?:последний\s+матч|last\s+match|вчера|yesterday|сегодня|today)\s*', ' ', cleaned, flags=re.IGNORECASE)
 
-        return None
+        # What's left is the player name
+        player_name = cleaned.strip().rstrip(',.- ')
+        if not player_name:
+            return None
+
+        return {
+            "type": "match",
+            "names": [self._clean_name(player_name)],
+            "team_hints": [self._extract_team_hint(player_name)],
+            "opponent": opponent,
+            "tournament": tournament,
+            "count": count,
+            "all_time": all_time,
+        }
 
     def _try_fast_split(self, query: str) -> Optional[dict]:
         """Fast regex-based detection of comparison queries without LLM."""
