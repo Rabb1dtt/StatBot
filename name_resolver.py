@@ -566,11 +566,16 @@ class NameResolver:
         """Ask Sonnet when a coach left a club, given that a new manager is now in charge."""
         if not self._llm:
             return None
+        from datetime import date
+        today = date.today().isoformat()
         prompt = (
-            f"The football club {team_name} currently has manager {current_manager}.\n"
-            f"When did {coach_name} leave/get fired from {team_name}?\n"
-            f"Reply with ONLY the date in YYYY-MM-DD format. If unsure, give your best estimate (at least month and year).\n"
-            f"If you truly don't know, reply UNKNOWN."
+            f"Today's date is {today}.\n"
+            f"The football club {team_name} currently has manager {current_manager} (this is confirmed live data).\n"
+            f"This means {coach_name} is NO LONGER the manager of {team_name}.\n"
+            f"When approximately did {coach_name} leave/get fired from {team_name}?\n"
+            f"Give your best estimate in YYYY-MM-DD format.\n"
+            f"If you can only estimate the month, use the 1st of that month (e.g. 2026-01-01).\n"
+            f"Reply with ONLY the date, nothing else."
         )
         try:
             def _call():
@@ -580,11 +585,14 @@ class NameResolver:
                 )
                 return resp.choices[0].message.content.strip()
             result = await asyncio.to_thread(_call)
-            if result and result.upper() != "UNKNOWN" and len(result) >= 7:
-                # Normalize: "2026-01" → "2026-01-31", "2026-01-15" → as is
-                if len(result) == 7:
-                    result += "-28"
-                return result[:10]
+            # Extract date from response (may have extra text)
+            import re as _re
+            date_match = _re.search(r'(\d{4}-\d{2}(?:-\d{2})?)', result or "")
+            if date_match:
+                d = date_match.group(1)
+                if len(d) == 7:
+                    d += "-28"
+                return d[:10]
             return None
         except Exception:
             return None
