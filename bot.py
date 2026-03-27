@@ -240,7 +240,11 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         names = parsed["names"]
         hints = parsed.get("team_hints", [None] * len(names))
 
-        if qtype == "compare" and len(names) >= 2:
+        if qtype == "match":
+            opponent = parsed.get("opponent")
+            hint = hints[0] if hints else None
+            await _handle_match(message, names[0] if names else query, hint, opponent)
+        elif qtype == "compare" and len(names) >= 2:
             await _handle_compare(message, names[:5], hints[:5])
         else:
             hint = hints[0] if hints else None
@@ -271,6 +275,129 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         if final_text:
             result = md_to_html(final_text)
             ai_result_cache[ai_cache_key] = result
+            for chunk in split_message(result):
+                await message.answer(chunk, parse_mode=ParseMode.HTML)
+        else:
+            for chunk in split_message(raw_text):
+                await message.answer(chunk)
+
+    async def _handle_match(message: Message, name: str, team_hint: str | None, opponent: str | None) -> None:
+        """Analyze a player's performance in a specific match."""
+        resolved = await resolver.resolve(name, team_hint=team_hint)
+        if not resolved:
+            await message.answer(f"Не нашёл игрока «{name}».")
+            return
+
+        # Find SofaScore player
+        sofa_player = await sofa.search_player(resolved.name)
+        if not sofa_player:
+            await message.answer(f"Не нашёл {resolved.name} на SofaScore.")
+            return
+
+        player_id = sofa_player["id"]
+        await message.answer(f"Ищу матч {resolved.name}...")
+
+        # Get recent events
+        events = await sofa.get_player_events(player_id, page=0)
+        if not events:
+            await message.answer("Не нашёл матчей.")
+            return
+
+        # Find matching matches
+        target_events = []
+        if opponent:
+            # LLM transliterate opponent name
+            opp_latin = opponent
+            if resolver._llm:
+                guess = await resolver._guess_latin_name(opponent)
+                if guess:
+                    opp_latin = guess
+            opp_lower = opp_latin.lower()
+            # Also get more pages for older matches
+            all_events = list(events)
+            for page in range(1, 3):
+                more = await sofa.get_player_events(player_id, page)
+                if not more:
+                    break
+                all_events.extend(more)
+            for e in all_events:
+                home = e.get("homeTeam", {}).get("name", "")
+                away = e.get("awayTeam", {}).get("name", "")
+                if opp_lower in home.lower() or opp_lower in away.lower():
+                    target_events.append(e)
+        else:
+            # Last match
+            if events:
+                target_events = [events[0]]
+
+        if not target_events:
+            await message.answer(f"Не нашёл матчей {resolved.name} против «{opponent}».")
+            return
+
+        # Collect stats for all matching matches
+        all_lines = []
+        all_lines.append(f"Игрок: {resolved.name} ({resolved.team})")
+        if len(target_events) > 1:
+            all_lines.append(f"Найдено матчей: {len(target_events)}")
+        all_lines.append("")
+
+        stat_labels = {
+            "goals": "Голы", "goalAssist": "Ассисты",
+            "expectedGoals": "xG", "expectedAssists": "xA",
+            "totalShots": "Удары", "shotsOnTarget": "В створ",
+            "accuratePass": "Точные пасы", "totalPass": "Всего пасов",
+            "accurateLongBalls": "Точные длинные", "totalLongBalls": "Длинные",
+            "accurateCross": "Точные кроссы", "totalCross": "Кроссы",
+            "keyPass": "Ключевые передачи",
+            "tackles": "Отборы", "interceptions": "Перехваты",
+            "totalClearance": "Выносы", "ballRecovery": "Возвраты мяча",
+            "duelWon": "Единоборства выиграны", "duelLost": "Единоборства проиграны",
+            "aerialWon": "Воздушные выиграны", "aerialLost": "Воздушные проиграны",
+            "successfulDribbles": "Обводки", "dribbleAttempts": "Попытки обводок",
+            "touches": "Касания",
+            "fouls": "Фолы", "wasFouled": "Заработал фолы",
+            "saves": "Сейвы",
+            "goalsPrevented": "Предотвращённые голы",
+        }
+
+        for ev in target_events:
+            event_id = ev["id"]
+            home = ev.get("homeTeam", {}).get("name", "?")
+            away = ev.get("awayTeam", {}).get("name", "?")
+            h_score = ev.get("homeScore", {}).get("current", "?")
+            a_score = ev.get("awayScore", {}).get("current", "?")
+            tournament = ev.get("tournament", {}).get("uniqueTournament", {}).get("name", "?")
+            round_info = ev.get("roundInfo", {})
+            round_name = round_info.get("name", round_info.get("round", "?"))
+
+            stats = await sofa.get_player_event_stats(event_id, player_id)
+            if not stats:
+                all_lines.append(f"*{home} {h_score}-{a_score} {away}* ({tournament} R{round_name}) — нет данных")
+                all_lines.append("")
+                continue
+
+            mins = stats.get("minutesPlayed", 0)
+            rating = stats.get("rating", "—")
+
+            all_lines.append(f"*{home} {h_score}-{a_score} {away}*")
+            all_lines.append(f"Турнир: {tournament}, раунд {round_name}")
+            all_lines.append(f"Минут: {mins} | Рейтинг: {rating}")
+
+            for key, label in stat_labels.items():
+                val = stats.get(key)
+                if val is not None and val != 0:
+                    if isinstance(val, float):
+                        all_lines.append(f"  {label}: {val:.2f}")
+                    else:
+                        all_lines.append(f"  {label}: {val}")
+            all_lines.append("")
+
+        raw_text = "\n".join(all_lines)
+
+        # AI analysis
+        final = await analyzer.analyze_match(raw_text)
+        if final:
+            result = md_to_html(final)
             for chunk in split_message(result):
                 await message.answer(chunk, parse_mode=ParseMode.HTML)
         else:

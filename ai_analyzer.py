@@ -311,6 +311,26 @@ COMPARE_SYSTEM_PROMPT = """Ты — футбольный аналитик для
 """
 
 
+MATCH_SYSTEM_PROMPT = """Ты — футбольный аналитик. Тебе дают статистику игрока за ОДИН КОНКРЕТНЫЙ МАТЧ. Оцени его выступление.
+
+ПРАВИЛА
+- Используй ТОЛЬКО данные из входного текста.
+- Это один матч, не сезон — оценивай конкретную игру.
+- Учитывай позицию игрока при оценке метрик (приоритеты по позициям те же).
+- Рейтинг SofaScore — ориентир, но дай свою оценку на основе метрик.
+
+СТРУКТУРА (10–20 строк для Telegram)
+1) Заголовок: Имя — матч (счёт) | турнир | минуты | рейтинг
+2) Общее впечатление (1–2 предложения): хорошо/средне/плохо сыграл и почему.
+3) Что сделал хорошо (2–3 пункта с цифрами).
+4) Что не получилось (1–3 пункта с цифрами). Если всё хорошо — скажи.
+5) Ключевые цифры: xG, xA, пасы, единоборства, обводки — что выделяется.
+6) Вердикт: оценка выступления одним предложением + оценка 1–10.
+
+ЯЗЫК: русский.
+"""
+
+
 class AIAnalyzer:
     def __init__(self) -> None:
         if OpenAI and config.OPENROUTER_API_KEY:
@@ -357,6 +377,24 @@ class AIAnalyzer:
                 model=self.model,
                 messages=[
                     {"role": "system", "content": COMPARE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+            )
+            return resp.choices[0].message.content.strip()
+
+        return await asyncio.to_thread(_call)
+
+    async def analyze_match(self, raw_text: str) -> Optional[str]:
+        if not self.client:
+            return None
+
+        user_prompt = f"Оцени выступление игрока в матче.\n\n<<<\n{raw_text}\n>>>"
+
+        def _call() -> Optional[str]:
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": MATCH_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
             )

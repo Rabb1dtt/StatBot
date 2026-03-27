@@ -150,6 +150,53 @@ class NameResolver:
             return self._to_resolved(*best)
         return None
 
+    def _try_match_query(self, query: str) -> Optional[dict]:
+        """Detect match analysis queries like 'Салах против Реала' or 'Мбаппе последний матч'."""
+        q = query.strip()
+
+        # "Салах последний матч" / "Мбаппе last match" / "Холанд вчера"
+        last_match = re.match(
+            r'^(.+?)\s+(?:последний матч|last match|вчера|yesterday|сегодня|today)$',
+            q, flags=re.IGNORECASE,
+        )
+        if last_match:
+            return {
+                "type": "match",
+                "names": [self._clean_name(last_match.group(1))],
+                "team_hints": [self._extract_team_hint(last_match.group(1))],
+                "opponent": None,
+            }
+
+        # "как сыграл Салах против Реала" / "Салах против Арсенала" / "Мбаппе vs Барселона матч"
+        vs_match = re.match(
+            r'^(?:как\s+(?:сыграл|играл)\s+)?(.+?)\s+(?:против|vs\.?|versus)\s+(.+?)(?:\s+(?:матч|match))?$',
+            q, flags=re.IGNORECASE,
+        )
+        if vs_match:
+            player_raw = vs_match.group(1).strip()
+            opponent = vs_match.group(2).strip()
+            return {
+                "type": "match",
+                "names": [self._clean_name(player_raw)],
+                "team_hints": [self._extract_team_hint(player_raw)],
+                "opponent": opponent,
+            }
+
+        # "матч Салах Реал" / "match Mbappe Barcelona"
+        match_prefix = re.match(
+            r'^(?:матч|match)\s+(.+?)\s+(?:против|vs\.?|versus|—|-)\s+(.+)$',
+            q, flags=re.IGNORECASE,
+        )
+        if match_prefix:
+            return {
+                "type": "match",
+                "names": [self._clean_name(match_prefix.group(1))],
+                "team_hints": [self._extract_team_hint(match_prefix.group(1))],
+                "opponent": match_prefix.group(2).strip(),
+            }
+
+        return None
+
     def _try_fast_split(self, query: str) -> Optional[dict]:
         """Fast regex-based detection of comparison queries without LLM."""
         q = query.strip()
@@ -201,10 +248,15 @@ class NameResolver:
 
     async def parse_query(self, query: str) -> dict:
         """
-        Determine if user wants single player or comparison.
-        Returns: {"type": "single"|"compare", "names": [...]}
+        Determine query type: single, compare, or match.
+        Returns: {"type": "single"|"compare"|"match", "names": [...], ...}
         """
-        # Try fast regex first
+        # Try match query first (highest priority)
+        match_q = self._try_match_query(query)
+        if match_q:
+            return match_q
+
+        # Try comparison
         fast = self._try_fast_split(query)
         if fast:
             return fast
