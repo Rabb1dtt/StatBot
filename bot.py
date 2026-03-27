@@ -16,7 +16,8 @@ from understat_client import UnderstatPlayerClient
 from name_resolver import NameResolver
 from cachetools import TTLCache
 from stats_formatter import format_player_stats, format_match_breakdown
-from sofascore_client import SofascoreClient, format_sofascore_extra, format_cup_matches, CUP_TOURNAMENT_IDS
+from sofascore_client import SofascoreClient, format_sofascore_extra, format_cup_matches, CUP_TOURNAMENT_IDS, LEAGUE_TOURNAMENT_IDS
+from team_client import TeamDataClient, format_team_data
 from ai_analyzer import AIAnalyzer
 
 
@@ -126,6 +127,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
     usc = UnderstatPlayerClient()
     sofa = SofascoreClient()
     await sofa.start()
+    team_client = TeamDataClient()
     resolver = NameResolver(db)
     resolver.rebuild_index()
     analyzer = AIAnalyzer()
@@ -240,7 +242,14 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         names = parsed["names"]
         hints = parsed.get("team_hints", [None] * len(names))
 
-        if qtype == "match":
+        if qtype in ("coach", "team"):
+            await _handle_team(
+                message,
+                team_name=parsed.get("team", names[0] if names else query),
+                league=parsed.get("league"),
+                mode=qtype,
+            )
+        elif qtype == "match":
             hint = hints[0] if hints else None
             await _handle_match(
                 message,
@@ -282,6 +291,77 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         if final_text:
             result = md_to_html(final_text)
             ai_result_cache[ai_cache_key] = result
+            for chunk in split_message(result):
+                await message.answer(chunk, parse_mode=ParseMode.HTML)
+        else:
+            for chunk in split_message(raw_text):
+                await message.answer(chunk)
+
+    async def _handle_team(message: Message, team_name: str, league: str | None, mode: str = "team") -> None:
+        """Handle coach or team season analysis."""
+        if not league:
+            await message.answer("Не удалось определить лигу. Уточни: 'тренер Ливерпуля АПЛ'.")
+            return
+
+        await message.answer(f"Собираю данные по {team_name}...")
+
+        # Understat team data
+        try:
+            team_data = await team_client.get_team_season(team_name, league)
+        except Exception as e:
+            logger.exception("team data failed")
+            await message.answer(f"Ошибка: {type(e).__name__}: {e}")
+            return
+
+        if not team_data:
+            await message.answer(f"Не нашёл команду «{team_name}» в {league}.")
+            return
+
+        # SofaScore team stats
+        sofa_team_stats = None
+        try:
+            # Search team on SofaScore
+            sofa_search = await sofa._get(f"/search/teams?q={team_name}")
+            if sofa_search:
+                teams = sofa_search.get("results", [])
+                if teams:
+                    sofa_team_id = teams[0].get("entity", {}).get("id")
+                    if sofa_team_id:
+                        # Find league tournament ID
+                        from team_client import UNDERSTAT_LEAGUES
+                        us_league = UNDERSTAT_LEAGUES.get(league, league)
+                        ut_id = LEAGUE_TOURNAMENT_IDS.get(us_league)
+                        if ut_id:
+                            season_id = await sofa._get_current_season(ut_id)
+                            if season_id:
+                                data = await sofa._get(
+                                    f"/team/{sofa_team_id}/unique-tournament/{ut_id}/season/{season_id}/statistics/overall"
+                                )
+                                if data:
+                                    sofa_team_stats = data.get("statistics", {})
+        except Exception:
+            logger.exception("sofa team stats failed")
+
+        # Standings
+        standings = None
+        try:
+            from team_client import UNDERSTAT_LEAGUES
+            us_league = UNDERSTAT_LEAGUES.get(league, league)
+            standings = await sofa.get_league_top10(us_league)
+        except Exception:
+            pass
+
+        # Format
+        raw_text = format_team_data(team_data, sofa_team_stats, standings)
+
+        # AI
+        if mode == "coach":
+            final = await analyzer.analyze_coach(raw_text)
+        else:
+            final = await analyzer.analyze_team(raw_text)
+
+        if final:
+            result = md_to_html(final)
             for chunk in split_message(result):
                 await message.answer(chunk, parse_mode=ParseMode.HTML)
         else:

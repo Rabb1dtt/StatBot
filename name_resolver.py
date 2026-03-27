@@ -320,7 +320,11 @@ class NameResolver:
             "1) single — user wants season stats for ONE player. Example: 'Холанд', 'покажи Салаха'\n"
             "2) compare — user wants to COMPARE 2-5 players. Example: 'сравни Салаха и Мбаппе', 'Холанд vs Ямал vs Палмер'\n"
             "3) match — user wants to see how a player performed in SPECIFIC MATCH(ES). "
-            "Example: 'Орайли против Арсенала в финале кубка', 'Фоден последний матч', 'как Ямал сыграл против Реала в ЛЧ'\n\n"
+            "Example: 'Орайли против Арсенала в финале кубка', 'Фоден последний матч', 'как Ямал сыграл против Реала в ЛЧ'\n"
+            "4) coach — user wants to evaluate a COACH's work this season. "
+            "Example: 'тренер Ливерпуля', 'оценка Гвардиолы', 'как работает Анчелотти', 'coach Arteta'\n"
+            "5) team — user wants TEAM season analysis. "
+            "Example: 'сезон Ливерпуля', 'как играет Арсенал', 'оценка Реала', 'команда Барселона'\n\n"
 
             "RULES FOR PLAYER NAMES:\n"
             "- Extract the actual player name, removing qualifiers like 'последние 2 матча', 'в лиге' etc.\n"
@@ -346,19 +350,27 @@ class NameResolver:
             "- 'Хусанов последние 2 матча против Реала в ЛЧ' → TYPE: match, PLAYER1: Abdukodir Khusanov, OPPONENT: Real Madrid, TOURNAMENT: Champions League, COUNT: 2\n"
             "- 'Фоден против МЮ за карьеру' → TYPE: match, PLAYER1: Phil Foden, OPPONENT: Manchester United, TOURNAMENT: ALL, COUNT: ALL, ALL_TIME: yes\n"
             "- 'Салах последний матч' → TYPE: match, PLAYER1: Mohamed Salah, OPPONENT: NONE, COUNT: 1\n"
-            "- 'как Ямал сыграл против Реала' → TYPE: match, PLAYER1: Lamine Yamal, OPPONENT: Real Madrid, TOURNAMENT: ALL, COUNT: ALL\n\n"
+            "- 'как Ямал сыграл против Реала' → TYPE: match, PLAYER1: Lamine Yamal, OPPONENT: Real Madrid, TOURNAMENT: ALL, COUNT: ALL\n"
+            "- 'тренер Ливерпуля' → TYPE: coach, TEAM: Liverpool, LEAGUE: Premier League\n"
+            "- 'оценка Гвардиолы' → TYPE: coach, TEAM: Manchester City, LEAGUE: Premier League\n"
+            "- 'как работает Слот' → TYPE: coach, TEAM: Liverpool, LEAGUE: Premier League\n"
+            "- 'сезон Арсенала' → TYPE: team, TEAM: Arsenal, LEAGUE: Premier League\n"
+            "- 'как играет Барселона' → TYPE: team, TEAM: Barcelona, LEAGUE: LaLiga\n"
+            "- 'Реал Мадрид сезон' → TYPE: team, TEAM: Real Madrid, LEAGUE: LaLiga\n\n"
 
             "Reply STRICTLY in this format (one field per line, no extra text):\n"
-            "TYPE: single|compare|match\n"
-            "PLAYER1: <name in Latin>\n"
+            "TYPE: single|compare|match|coach|team\n"
+            "PLAYER1: <name in Latin> (for single/compare/match)\n"
             "TEAM_HINT1: <team or NONE>\n"
             "PLAYER2: <name or skip>\n"
             "TEAM_HINT2: <team or NONE>\n"
             "(PLAYER3-5 + TEAM_HINT3-5 if needed)\n"
-            "OPPONENT: <team in English or NONE>\n"
-            "TOURNAMENT: <name or ALL>\n"
-            "COUNT: <number or ALL>\n"
-            "ALL_TIME: yes|no\n\n"
+            "OPPONENT: <team in English or NONE> (for match)\n"
+            "TOURNAMENT: <name or ALL> (for match)\n"
+            "COUNT: <number or ALL> (for match)\n"
+            "ALL_TIME: yes|no (for match)\n"
+            "TEAM: <team name in English> (for coach/team)\n"
+            "LEAGUE: <league name> (for coach/team)\n\n"
             f"Query: {query}"
         )
         try:
@@ -377,6 +389,8 @@ class NameResolver:
             tournament = None
             count = None
             all_time = False
+            team_name = None
+            league_name = None
 
             for line in text.splitlines():
                 line = line.strip()
@@ -390,7 +404,7 @@ class NameResolver:
 
                 if key == "TYPE":
                     v = val.lower()
-                    if v in ("compare", "match", "single"):
+                    if v in ("compare", "match", "single", "coach", "team"):
                         qtype = v
                 elif re.match(r'^PLAYER\d+$', key):
                     if val and val.upper() != "NONE":
@@ -412,6 +426,22 @@ class NameResolver:
                             pass
                 elif key == "ALL_TIME":
                     all_time = val.lower() in ("yes", "true")
+                elif key == "TEAM":
+                    if val and val.upper() != "NONE":
+                        team_name = val
+                elif key == "LEAGUE":
+                    if val and val.upper() != "NONE":
+                        league_name = val
+
+            # Coach/team queries
+            if qtype in ("coach", "team") and team_name:
+                return {
+                    "type": qtype,
+                    "names": [team_name],
+                    "team_hints": [None],
+                    "team": team_name,
+                    "league": league_name,
+                }
 
             if not names:
                 return {"type": "single", "names": [query], "team_hints": [None]}
