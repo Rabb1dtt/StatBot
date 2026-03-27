@@ -194,6 +194,14 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         except Exception:
             logger.exception("sofascore fetch failed")
 
+        # Add league standings top 10
+        try:
+            standings = await sofa.get_league_top10(resolved.league)
+            if standings:
+                text += "\n\n" + standings
+        except Exception:
+            logger.exception("standings fetch failed")
+
         # Cache the final text
         player_text_cache[resolved.understat_id] = text
         return text, None

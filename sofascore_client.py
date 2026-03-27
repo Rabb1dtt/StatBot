@@ -33,6 +33,7 @@ class SofascoreClient:
         self._stats_cache: TTLCache = TTLCache(maxsize=2048, ttl=CACHE_TTL)
         self._id_cache: TTLCache = TTLCache(maxsize=2048, ttl=CACHE_TTL)
         self._season_cache: Dict[int, int] = {}  # tournament_id -> season_id
+        self._standings_cache: TTLCache = TTLCache(maxsize=32, ttl=CACHE_TTL)
 
     async def start(self) -> None:
         if self._client is None:
@@ -133,6 +134,48 @@ class SofascoreClient:
 
         self._stats_cache[cache_key] = stats
         return stats
+
+    async def get_league_top10(self, league: str) -> Optional[str]:
+        """Get top 10 standings for a league. Returns formatted text."""
+        cached = self._standings_cache.get(league)
+        if cached is not None:
+            return cached
+
+        ut_id = LEAGUE_TOURNAMENT_IDS.get(league)
+        if not ut_id:
+            return None
+
+        season_id = await self._get_current_season(ut_id)
+        if not season_id:
+            return None
+
+        data = await self._get(
+            f"/unique-tournament/{ut_id}/season/{season_id}/standings/total"
+        )
+        if not data:
+            return None
+
+        standings = data.get("standings", [])
+        if not standings:
+            return None
+
+        rows = standings[0].get("rows", [])
+        lines = [f"*Таблица {league} (топ-10 текущий сезон):*"]
+        for r in rows[:10]:
+            t = r.get("team", {})
+            name = t.get("name", "?")
+            pos = r.get("position", "?")
+            pts = r.get("points", 0)
+            w = r.get("wins", 0)
+            d = r.get("draws", 0)
+            l = r.get("losses", 0)
+            gf = r.get("scoresFor", 0)
+            ga = r.get("scoresAgainst", 0)
+            lines.append(f"  {pos}. {name} — {pts}pts ({w}W {d}D {l}L, {gf}-{ga})")
+
+        result = "\n".join(lines)
+        self._standings_cache[league] = result
+        return result
 
 
 POSITION_NAMES = {
