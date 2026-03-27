@@ -2,15 +2,12 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
+from curl_cffi.requests import AsyncSession
 from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
 
 BASE = "https://api.sofascore.com/api/v1"
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-}
 
 # league name -> unique_tournament_id
 LEAGUE_TOURNAMENT_IDS = {
@@ -29,30 +26,29 @@ class SofascoreClient:
     """Fetches detailed player stats (dribbling, duels, etc.) from SofaScore API."""
 
     def __init__(self) -> None:
-        self._client: Optional[httpx.AsyncClient] = None
+        self._session: Optional[AsyncSession] = None
         self._stats_cache: TTLCache = TTLCache(maxsize=2048, ttl=CACHE_TTL)
         self._id_cache: TTLCache = TTLCache(maxsize=2048, ttl=CACHE_TTL)
         self._season_cache: Dict[int, int] = {}  # tournament_id -> season_id
         self._standings_cache: TTLCache = TTLCache(maxsize=32, ttl=CACHE_TTL)
 
     async def start(self) -> None:
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                base_url=BASE, headers=HEADERS,
-                follow_redirects=True, timeout=15.0,
-            )
+        if self._session is None:
+            self._session = AsyncSession(impersonate="chrome", timeout=15)
 
     async def close(self) -> None:
-        if self._client:
-            await self._client.aclose()
-            self._client = None
+        if self._session:
+            await self._session.close()
+            self._session = None
 
     async def _get(self, path: str) -> Optional[Dict]:
-        if self._client is None:
+        if self._session is None:
             await self.start()
         try:
-            resp = await self._client.get(path)
+            url = f"{BASE}{path}" if path.startswith("/") else path
+            resp = await self._session.get(url)
             if resp.status_code != 200:
+                logger.warning("SofaScore %d: %s", resp.status_code, path)
                 return None
             return resp.json()
         except Exception:
