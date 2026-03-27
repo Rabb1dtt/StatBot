@@ -159,17 +159,29 @@ def format_team_data(team: Dict, sofa_team_stats: Optional[Dict] = None, standin
             country = manager.get("country", {}).get("name", "")
             if country:
                 coach_line += f" ({country})"
+        if coach_since:
+            coach_line += f" | назначен: {coach_since}"
+        if coach_until:
+            coach_line += f" | уволен/ушёл: {coach_until}"
+        elif coach_since:
+            # Check if current SofaScore manager is different → coach was replaced
+            current_mgr = manager.get("name", "") if manager else ""
+            if current_mgr and mgr_display and current_mgr.lower() != mgr_display.lower():
+                coach_line += f" | ЗАМЕНЁН на {current_mgr}"
         lines.append(coach_line)
 
     # Evaluation period
     first = team.get("first_date", "?")
     last = team.get("last_date", "?")
-    if coach_since and coach_until:
-        lines.append(f"Период оценки: {first} — {last} (назначен {coach_since}, уволен/ушёл {coach_until})")
-    elif coach_since:
-        lines.append(f"Период оценки: {first} — {last} (в клубе с {coach_since})")
-    else:
-        lines.append(f"Период оценки: {first} — {last}")
+    if first and first != "?" and last and last != "?":
+        period = f"Период оценки: {first} — {last}"
+        if coach_since and coach_until:
+            period += " (отфильтровано по периоду работы тренера)"
+        elif coach_since:
+            period += " (с момента назначения)"
+        lines.append(period)
+    elif team.get("matches", 0) > 0:
+        lines.append(f"Матчей в выборке: {team['matches']}")
     lines.append(f"Матчей: {team['matches']} | {team['wins']}W {team['draws']}D {team['losses']}L | {team['points']} очков (PPG: {team['ppg']})")
     lines.append(f"Голы: {team['goals']} забито, {team['conceded']} пропущено (разница: {team['gd']})")
     lines.append("")
