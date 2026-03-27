@@ -130,11 +130,15 @@ class TeamDataClient:
         }
 
 
-def format_team_data(team: Dict, sofa_team_stats: Optional[Dict] = None, standings: Optional[str] = None) -> str:
+def format_team_data(team: Dict, sofa_team_stats: Optional[Dict] = None, standings: Optional[str] = None, manager: Optional[Dict] = None) -> str:
     """Format team data for AI analysis."""
     lines = []
     title = team.get("title", "?")
     lines.append(f"*Команда: {title}*")
+    if manager:
+        mgr_name = manager.get("name", "?")
+        mgr_country = manager.get("country", {}).get("name", "")
+        lines.append(f"Тренер: {mgr_name}" + (f" ({mgr_country})" if mgr_country else ""))
     lines.append(f"Матчей: {team['matches']} | {team['wins']}W {team['draws']}D {team['losses']}L | {team['points']} очков (PPG: {team['ppg']})")
     lines.append(f"Голы: {team['goals']} забито, {team['conceded']} пропущено (разница: {team['gd']})")
     lines.append("")

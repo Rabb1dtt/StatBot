@@ -303,6 +303,55 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             for chunk in split_message(raw_text):
                 await message.answer(chunk)
 
+    async def _fetch_team_full(team_name: str, league: str) -> tuple[str | None, str | None]:
+        """Fetch team data from Understat + SofaScore. Returns (formatted_text, error)."""
+        try:
+            team_data = await team_client.get_team_season(team_name, league)
+        except Exception as e:
+            return None, f"Ошибка для {team_name}: {e}"
+        if not team_data:
+            return None, f"Не нашёл команду «{team_name}» в {league}."
+
+        sofa_team_stats = None
+        manager = None
+        try:
+            sofa_search = await sofa._get(f"/search/teams?q={team_name}")
+            if sofa_search:
+                sofa_teams = sofa_search.get("results", [])
+                if sofa_teams:
+                    sofa_team_id = sofa_teams[0].get("entity", {}).get("id")
+                    if sofa_team_id:
+                        # Manager
+                        team_info = await sofa._get(f"/team/{sofa_team_id}")
+                        if team_info:
+                            manager = team_info.get("team", {}).get("manager")
+
+                        # Stats
+                        from team_client import UNDERSTAT_LEAGUES
+                        us_league = UNDERSTAT_LEAGUES.get(league, league)
+                        ut_id = LEAGUE_TOURNAMENT_IDS.get(us_league)
+                        if ut_id:
+                            season_id = await sofa._get_current_season(ut_id)
+                            if season_id:
+                                data = await sofa._get(
+                                    f"/team/{sofa_team_id}/unique-tournament/{ut_id}/season/{season_id}/statistics/overall"
+                                )
+                                if data:
+                                    sofa_team_stats = data.get("statistics", {})
+        except Exception:
+            logger.exception("sofa team fetch failed")
+
+        standings = None
+        try:
+            from team_client import UNDERSTAT_LEAGUES
+            us_league = UNDERSTAT_LEAGUES.get(league, league)
+            standings = await sofa.get_league_top10(us_league)
+        except Exception:
+            pass
+
+        text = format_team_data(team_data, sofa_team_stats, standings, manager)
+        return text, None
+
     async def _handle_compare_coaches(message: Message, teams: list[str], leagues: list[str]) -> None:
         """Compare 2+ coaches by their team stats."""
         if len(teams) < 2:
@@ -317,48 +366,10 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             if not league:
                 await message.answer(f"Не удалось определить лигу для {team_name}.")
                 return
-
-            try:
-                team_data = await team_client.get_team_season(team_name, league)
-            except Exception as e:
-                await message.answer(f"Ошибка для {team_name}: {e}")
+            text, err = await _fetch_team_full(team_name, league)
+            if err:
+                await message.answer(err)
                 return
-            if not team_data:
-                await message.answer(f"Не нашёл команду «{team_name}» в {league}.")
-                return
-
-            # SofaScore team stats
-            sofa_team_stats = None
-            try:
-                sofa_search = await sofa._get(f"/search/teams?q={team_name}")
-                if sofa_search:
-                    sofa_teams = sofa_search.get("results", [])
-                    if sofa_teams:
-                        sofa_team_id = sofa_teams[0].get("entity", {}).get("id")
-                        if sofa_team_id:
-                            from team_client import UNDERSTAT_LEAGUES
-                            us_league = UNDERSTAT_LEAGUES.get(league, league)
-                            ut_id = LEAGUE_TOURNAMENT_IDS.get(us_league)
-                            if ut_id:
-                                season_id = await sofa._get_current_season(ut_id)
-                                if season_id:
-                                    data = await sofa._get(
-                                        f"/team/{sofa_team_id}/unique-tournament/{ut_id}/season/{season_id}/statistics/overall"
-                                    )
-                                    if data:
-                                        sofa_team_stats = data.get("statistics", {})
-            except Exception:
-                pass
-
-            standings = None
-            try:
-                from team_client import UNDERSTAT_LEAGUES
-                us_league = UNDERSTAT_LEAGUES.get(league, league)
-                standings = await sofa.get_league_top10(us_league)
-            except Exception:
-                pass
-
-            text = format_team_data(team_data, sofa_team_stats, standings)
             team_texts.append(text)
 
         # AI comparison
@@ -380,54 +391,10 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
 
         await message.answer(f"Собираю данные по {team_name}...")
 
-        # Understat team data
-        try:
-            team_data = await team_client.get_team_season(team_name, league)
-        except Exception as e:
-            logger.exception("team data failed")
-            await message.answer(f"Ошибка: {type(e).__name__}: {e}")
+        raw_text, err = await _fetch_team_full(team_name, league)
+        if err:
+            await message.answer(err)
             return
-
-        if not team_data:
-            await message.answer(f"Не нашёл команду «{team_name}» в {league}.")
-            return
-
-        # SofaScore team stats
-        sofa_team_stats = None
-        try:
-            # Search team on SofaScore
-            sofa_search = await sofa._get(f"/search/teams?q={team_name}")
-            if sofa_search:
-                teams = sofa_search.get("results", [])
-                if teams:
-                    sofa_team_id = teams[0].get("entity", {}).get("id")
-                    if sofa_team_id:
-                        # Find league tournament ID
-                        from team_client import UNDERSTAT_LEAGUES
-                        us_league = UNDERSTAT_LEAGUES.get(league, league)
-                        ut_id = LEAGUE_TOURNAMENT_IDS.get(us_league)
-                        if ut_id:
-                            season_id = await sofa._get_current_season(ut_id)
-                            if season_id:
-                                data = await sofa._get(
-                                    f"/team/{sofa_team_id}/unique-tournament/{ut_id}/season/{season_id}/statistics/overall"
-                                )
-                                if data:
-                                    sofa_team_stats = data.get("statistics", {})
-        except Exception:
-            logger.exception("sofa team stats failed")
-
-        # Standings
-        standings = None
-        try:
-            from team_client import UNDERSTAT_LEAGUES
-            us_league = UNDERSTAT_LEAGUES.get(league, league)
-            standings = await sofa.get_league_top10(us_league)
-        except Exception:
-            pass
-
-        # Format
-        raw_text = format_team_data(team_data, sofa_team_stats, standings)
 
         # AI
         if mode == "coach":
