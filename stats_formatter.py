@@ -130,6 +130,7 @@ def format_match_breakdown(team: str, matches: List[Dict], season: str = "2025")
                 "matches": 0, "goals": 0, "assists": 0,
                 "xG": 0.0, "xA": 0.0, "shots": 0, "minutes": 0,
                 "key_passes": 0, "wins": 0, "draws": 0, "losses": 0,
+                "sub_appearances": 0,
             }
         o = opponents[opponent]
         o["matches"] += 1
@@ -138,6 +139,8 @@ def format_match_breakdown(team: str, matches: List[Dict], season: str = "2025")
         o["shots"] += int(m.get("shots", 0))
         o["minutes"] += int(m.get("time", 0))
         o["key_passes"] += int(m.get("key_passes", 0))
+        if str(m.get("position", "")).lower() == "sub":
+            o["sub_appearances"] += 1
         try:
             o["xG"] += float(m.get("xG", 0))
             o["xA"] += float(m.get("xA", 0))
@@ -166,32 +169,47 @@ def format_match_breakdown(team: str, matches: List[Dict], season: str = "2025")
 
     lines: List[str] = []
     lines.append("*Разбивка по соперникам (текущий сезон, только лига):*")
-    lines.append("Соперник | Матчи | Голы | Ассисты | xG | xA | Удары | Результат")
 
-    productive_goals = 0
     productive_opps = 0
-    quiet_goals = 0
     quiet_opps = 0
+    not_played_opps = 0
 
     for opp, s in sorted_opps:
+        mins = s["minutes"]
+        matches = s["matches"]
+        ga = s["goals"] + s["assists"]
+
+        # Context tag
+        if mins == 0:
+            tag = " [НЕ ИГРАЛ]"
+            not_played_opps += 1
+        elif s["sub_appearances"] == matches:
+            tag = f" [замены, {mins}мин]"
+        else:
+            tag = ""
+
         wdl = f"{s['wins']}W-{s['draws']}D-{s['losses']}L"
         lines.append(
-            f"  {opp}: {s['matches']}м | {s['goals']}г {s['assists']}а | "
-            f"xG {_fmt(s['xG'])} xA {_fmt(s['xA'])} | {s['shots']}уд | {wdl}"
+            f"  {opp}: {matches}м {mins}мин | {s['goals']}г {s['assists']}а | "
+            f"xG {_fmt(s['xG'])} xA {_fmt(s['xA'])} | {s['shots']}уд | {wdl}{tag}"
         )
-        ga = s["goals"] + s["assists"]
-        if ga > 0:
-            productive_goals += s["goals"]
+
+        if mins == 0:
+            pass  # don't count as quiet
+        elif ga > 0:
             productive_opps += 1
         else:
-            quiet_goals += 0
             quiet_opps += 1
 
     # Summary for AI
     lines.append("")
+    played_opps = productive_opps + quiet_opps
     total_opps = len(opponents)
-    lines.append(f"Голевые действия против {productive_opps} из {total_opps} соперников")
-    lines.append(f"Без голевых действий против {quiet_opps} соперников")
+    lines.append(f"Голевые действия против {productive_opps} из {played_opps} соперников (играл)")
+    if quiet_opps > 0:
+        lines.append(f"Без голевых действий против {quiet_opps} соперников (но играл)")
+    if not_played_opps > 0:
+        lines.append(f"Не выходил на поле против {not_played_opps} соперников — нет данных")
 
     # Last 5 matches form
     recent = season_matches[:5]
@@ -204,9 +222,13 @@ def format_match_breakdown(team: str, matches: List[Dict], season: str = "2025")
             opp = a_team if h_team == team else h_team
             venue = "Д" if h_team == team else "В"
             score = f"{m.get('h_goals')}-{m.get('a_goals')}"
+            mins = m.get("time", 0)
+            pos = m.get("position", "")
+            sub_tag = " (замена)" if str(pos).lower() == "sub" else ""
             lines.append(
                 f"  {m.get('date')} ({venue}) vs {opp} {score} — "
-                f"{m.get('goals')}г {m.get('assists')}а, xG {_fmt(m.get('xG'))} xA {_fmt(m.get('xA'))}"
+                f"{mins}мин{sub_tag} | {m.get('goals')}г {m.get('assists')}а, "
+                f"xG {_fmt(m.get('xG'))} xA {_fmt(m.get('xA'))}"
             )
 
     return "\n".join(lines)
