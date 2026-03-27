@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 import re
 
@@ -17,6 +18,31 @@ from cachetools import TTLCache
 from stats_formatter import format_player_stats, format_match_breakdown
 from sofascore_client import SofascoreClient, format_sofascore_extra
 from ai_analyzer import AIAnalyzer
+
+
+def md_to_html(text: str) -> str:
+    """Convert AI markdown output to Telegram-compatible HTML."""
+    # Escape HTML entities first (but preserve existing tags if any)
+    text = html.escape(text)
+
+    # **bold** or __bold__ → <b>bold</b>
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+    text = re.sub(r'__(.+?)__', r'<b>\1</b>', text)
+
+    # *italic* or _italic_ (but not inside words like player_name)
+    text = re.sub(r'(?<!\w)\*(.+?)\*(?!\w)', r'<i>\1</i>', text)
+    text = re.sub(r'(?<!\w)_(.+?)_(?!\w)', r'<i>\1</i>', text)
+
+    # `code` → <code>code</code>
+    text = re.sub(r'`(.+?)`', r'<code>\1</code>', text)
+
+    # ### heading or ## heading or # heading → <b>heading</b>
+    text = re.sub(r'^#{1,3}\s+(.+)$', r'<b>\1</b>', text, flags=re.MULTILINE)
+
+    # --- or ___ horizontal rule → just a line
+    text = re.sub(r'^[\-_]{3,}$', '———', text, flags=re.MULTILINE)
+
+    return text
 
 
 def extract_query(message: Message, bot_username: str) -> str | None:
@@ -79,7 +105,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
 
     bot = Bot(
         token=config.BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher()
 
@@ -204,15 +230,18 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         if cached_ai:
             logger.info("AI cache hit for %s", name)
             for chunk in split_message(cached_ai):
-                await message.answer(chunk, parse_mode=None)
+                await message.answer(chunk, parse_mode=ParseMode.HTML)
             return
 
         final_text = await analyzer.analyze(raw_text)
-        text = final_text or raw_text
         if final_text:
-            ai_result_cache[ai_cache_key] = final_text
-        for chunk in split_message(text):
-            await message.answer(chunk, parse_mode=None if final_text else ParseMode.MARKDOWN)
+            result = md_to_html(final_text)
+            ai_result_cache[ai_cache_key] = result
+            for chunk in split_message(result):
+                await message.answer(chunk, parse_mode=ParseMode.HTML)
+        else:
+            for chunk in split_message(raw_text):
+                await message.answer(chunk)
 
     async def _handle_compare(message: Message, name1: str, name2: str) -> None:
         await message.answer(f"Ищу {name1} и {name2}...")
@@ -234,8 +263,9 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
 
         final_text = await analyzer.compare(text1, text2)
         if final_text:
-            for chunk in split_message(final_text):
-                await message.answer(chunk, parse_mode=None)
+            result = md_to_html(final_text)
+            for chunk in split_message(result):
+                await message.answer(chunk, parse_mode=ParseMode.HTML)
         else:
             combined = f"=== ИГРОК 1 ===\n{text1}\n\n=== ИГРОК 2 ===\n{text2}"
             for chunk in split_message(combined):
