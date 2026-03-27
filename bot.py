@@ -141,9 +141,9 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             "Сравнить: «Салах vs Мбаппе» или «сравни Холанда и Палмера»"
         )
 
-    async def _fetch_stats(name: str) -> tuple[str | None, str | None]:
+    async def _fetch_stats(name: str, team_hint: str | None = None) -> tuple[str | None, str | None]:
         """Resolve + fetch stats. Returns (formatted_text, error). Cached 24h by player ID."""
-        resolved = await resolver.resolve(name)
+        resolved = await resolver.resolve(name, team_hint=team_hint)
         if not resolved:
             return None, f"Не нашёл игрока «{name}». Доступны 6 лиг: EPL, La Liga, Serie A, Bundesliga, Ligue 1, РПЛ."
 
@@ -206,15 +206,17 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
 
         qtype = parsed["type"]
         names = parsed["names"]
+        hints = parsed.get("team_hints", [None] * len(names))
 
         if qtype == "compare" and len(names) >= 2:
-            await _handle_compare(message, names[:5])
+            await _handle_compare(message, names[:5], hints[:5])
         else:
-            await _handle_single(message, names[0] if names else query)
+            hint = hints[0] if hints else None
+            await _handle_single(message, names[0] if names else query, hint)
 
-    async def _handle_single(message: Message, name: str) -> None:
+    async def _handle_single(message: Message, name: str, team_hint: str | None = None) -> None:
         try:
-            raw_text, err = await _fetch_stats(name)
+            raw_text, err = await _fetch_stats(name, team_hint)
         except Exception as e:
             logger.exception("fetch failed")
             await message.answer(f"Ошибка: {type(e).__name__}: {e}")
@@ -243,13 +245,16 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             for chunk in split_message(raw_text):
                 await message.answer(chunk)
 
-    async def _handle_compare(message: Message, names: list[str]) -> None:
+    async def _handle_compare(message: Message, names: list[str], hints: list[str | None] | None = None) -> None:
         await message.answer(f"Ищу {', '.join(names)}...")
 
+        if not hints:
+            hints = [None] * len(names)
+
         player_texts: list[str] = []
-        for name in names:
+        for name, hint in zip(names, hints):
             try:
-                text, err = await _fetch_stats(name)
+                text, err = await _fetch_stats(name, hint)
             except Exception as e:
                 logger.exception("compare fetch failed for %s", name)
                 await message.answer(f"Ошибка для {name}: {type(e).__name__}: {e}")

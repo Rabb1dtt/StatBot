@@ -96,11 +96,31 @@ class NameResolver:
         sorted_results = sorted(best_results.values(), key=lambda x: x[0], reverse=True)
         return [p for _, p in sorted_results[:limit]]
 
-    async def resolve(self, query: str) -> Optional[ResolvedPlayer]:
-        """Resolve a player name query to a ResolvedPlayer."""
-        results = self._fuzzy_search(query)
-        if results:
-            best = results[0]
+    def _pick_best(self, results: List[Dict], team_hint: Optional[str] = None) -> Optional[Dict]:
+        """Pick the best result, boosting matches with team_hint."""
+        if not results:
+            return None
+        if not team_hint or len(results) == 1:
+            return results[0]
+
+        # Transliterate hint for matching
+        hint_lower = _normalize(team_hint)
+        hint_latin = _normalize(_transliterate(team_hint))
+
+        for r in results:
+            team = _normalize(r.get("team", ""))
+            if hint_lower in team or hint_latin in team or team in hint_lower or team in hint_latin:
+                return r
+        # No team match — return first (best fuzzy)
+        return results[0]
+
+    async def resolve(self, query: str, team_hint: Optional[str] = None) -> Optional[ResolvedPlayer]:
+        """Resolve a player name query to a ResolvedPlayer.
+        team_hint: optional team name from parentheses, e.g. 'Реал Мадрид'.
+        """
+        results = self._fuzzy_search(query, limit=10)
+        best = self._pick_best(results, team_hint)
+        if best:
             return ResolvedPlayer(
                 understat_id=best["understat_id"],
                 name=best["name"],
@@ -113,9 +133,9 @@ class NameResolver:
         if self._llm:
             guess = await self._guess_latin_name(query)
             if guess:
-                results = self._fuzzy_search(guess)
-                if results:
-                    best = results[0]
+                results = self._fuzzy_search(guess, limit=10)
+                best = self._pick_best(results, team_hint)
+                if best:
                     return ResolvedPlayer(
                         understat_id=best["understat_id"],
                         name=best["name"],
@@ -134,35 +154,46 @@ class NameResolver:
         q_clean = re.sub(r'^(сравни(?:ть)?|compare)\s+', '', q, flags=re.IGNORECASE).strip()
         if q_clean != q:
             # Had a comparison prefix — split the rest
-            names = self._split_names(q_clean)
-            if len(names) >= 2:
-                return {"type": "compare", "names": names[:5]}
+            raw_parts = self._split_raw(q_clean)
+            if len(raw_parts) >= 2:
+                return self._build_compare(raw_parts[:5])
 
         # Check for "vs", "против", comma separators
         separators = r'\s+(?:vs\.?|versus|против)\s+|\s*,\s*'
         parts = re.split(separators, q, flags=re.IGNORECASE)
         if len(parts) >= 2:
-            names = [self._clean_name(p) for p in parts if p.strip()]
-            if len(names) >= 2:
-                return {"type": "compare", "names": names[:5]}
+            raw_parts = [p.strip() for p in parts if p.strip()]
+            if len(raw_parts) >= 2:
+                return self._build_compare(raw_parts[:5])
 
         # Try " и " split — but only if result has 2+ non-empty parts
         parts = re.split(r'\s+и\s+', q, flags=re.IGNORECASE)
         if len(parts) >= 2:
-            names = [self._clean_name(p) for p in parts if p.strip()]
-            if len(names) >= 2 and all(len(n.split()) <= 4 for n in names):
-                return {"type": "compare", "names": names[:5]}
+            raw_parts = [p.strip() for p in parts if p.strip()]
+            if len(raw_parts) >= 2 and all(len(p.split()) <= 5 for p in raw_parts):
+                return self._build_compare(raw_parts[:5])
 
         return None
 
-    def _split_names(self, text: str) -> list[str]:
-        """Split a text like 'Салаха и Мбаппе' or 'A vs B vs C' into names."""
+    def _split_raw(self, text: str) -> list[str]:
+        """Split text into raw parts (keeping parentheses)."""
         parts = re.split(r'\s+(?:vs\.?|versus|против|и)\s+|\s*,\s*', text, flags=re.IGNORECASE)
-        return [self._clean_name(p) for p in parts if p.strip()]
+        return [p.strip() for p in parts if p.strip()]
 
-    def _clean_name(self, name: str) -> str:
+    def _build_compare(self, raw_parts: list[str]) -> dict:
+        """Build compare result with names and team hints."""
+        names = [self._clean_name(p) for p in raw_parts]
+        hints = [self._extract_team_hint(p) for p in raw_parts]
+        return {"type": "compare", "names": names, "team_hints": hints}
+
+    def _clean_name(self, raw: str) -> str:
         """Remove team hints in parentheses: 'Винисиус (Реал Мадрид)' → 'Винисиус'."""
-        return re.sub(r'\s*\([^)]*\)\s*', ' ', name).strip()
+        return re.sub(r'\s*\([^)]*\)\s*', ' ', raw).strip()
+
+    def _extract_team_hint(self, raw: str) -> Optional[str]:
+        """Extract team hint from parentheses: 'Винисиус (Реал Мадрид)' → 'Реал Мадрид'."""
+        m = re.search(r'\(([^)]+)\)', raw)
+        return m.group(1).strip() if m else None
 
     async def parse_query(self, query: str) -> dict:
         """
@@ -217,10 +248,10 @@ class NameResolver:
                         names.append(name)
 
             if names:
-                return {"type": qtype, "names": names}
-            return {"type": "single", "names": [query]}
+                return {"type": qtype, "names": names, "team_hints": [None] * len(names)}
+            return {"type": "single", "names": [query], "team_hints": [None]}
         except Exception:
-            return {"type": "single", "names": [query]}
+            return {"type": "single", "names": [query], "team_hints": [None]}
 
     async def _guess_latin_name(self, query: str) -> Optional[str]:
         if not self._llm:
