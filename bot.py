@@ -6,7 +6,7 @@ import re
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
 
 import config
@@ -138,8 +138,19 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         await message.answer(
             f"Привет! В базе {count} игроков из 6 топ-лиг.\n"
             "Отправь имя — пришлю статистику за текущий сезон.\n"
-            "Сравнить: «Салах vs Мбаппе» или «сравни Холанда и Палмера»"
+            "Сравнить: «Салах vs Мбаппе» или «сравни Холанда и Палмера»\n"
+            "/clearcache — очистить кэш"
         )
+
+    @dp.message(Command("clearcache"))
+    async def on_clearcache(message: Message) -> None:
+        player_text_cache.clear()
+        ai_result_cache.clear()
+        usc._season_cache.clear()
+        usc._match_cache.clear()
+        sofa._stats_cache.clear()
+        sofa._id_cache.clear()
+        await message.answer("Кэш очищен.")
 
     async def _fetch_stats(name: str, team_hint: str | None = None) -> tuple[str | None, str | None]:
         """Resolve + fetch stats. Returns (formatted_text, error). Cached 24h by player ID."""
