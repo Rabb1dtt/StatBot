@@ -561,3 +561,30 @@ class NameResolver:
             return await asyncio.to_thread(_call)
         except Exception:
             return None
+
+    async def _guess_coach_departure(self, coach_name: str, team_name: str, current_manager: str) -> Optional[str]:
+        """Ask Sonnet when a coach left a club, given that a new manager is now in charge."""
+        if not self._llm:
+            return None
+        prompt = (
+            f"The football club {team_name} currently has manager {current_manager}.\n"
+            f"When did {coach_name} leave/get fired from {team_name}?\n"
+            f"Reply with ONLY the date in YYYY-MM-DD format. If unsure, give your best estimate (at least month and year).\n"
+            f"If you truly don't know, reply UNKNOWN."
+        )
+        try:
+            def _call():
+                resp = self._llm.chat.completions.create(
+                    model=self.model_orchestrator,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return resp.choices[0].message.content.strip()
+            result = await asyncio.to_thread(_call)
+            if result and result.upper() != "UNKNOWN" and len(result) >= 7:
+                # Normalize: "2026-01" → "2026-01-31", "2026-01-15" → as is
+                if len(result) == 7:
+                    result += "-28"
+                return result[:10]
+            return None
+        except Exception:
+            return None

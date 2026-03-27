@@ -345,9 +345,25 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         except Exception:
             logger.exception("sofa team fetch failed")
 
+        # Auto-detect coach departure: if current manager differs, ask Sonnet for date
+        if coach_name and not coach_until and manager:
+            current_mgr = manager.get("name", "")
+            if current_mgr and current_mgr.lower() != coach_name.lower():
+                logger.info("Coach mismatch: %s vs current %s, asking Sonnet for departure date", coach_name, current_mgr)
+                try:
+                    departure = await resolver._guess_coach_departure(coach_name, team_name, current_mgr)
+                    if departure:
+                        coach_until = departure
+                        logger.info("Sonnet says %s left on %s", coach_name, coach_until)
+                        # Re-fetch with corrected date range
+                        team_data = await team_client.get_team_season(team_name, league, coach_since=coach_since, coach_until=coach_until)
+                        if not team_data:
+                            return None, f"Нет данных за период {coach_since} — {coach_until}."
+                except Exception:
+                    logger.exception("coach departure detection failed")
+
         standings = None
         try:
-            from team_client import UNDERSTAT_LEAGUES
             us_league = UNDERSTAT_LEAGUES.get(league, league)
             standings = await sofa.get_league_top10(us_league)
         except Exception:
@@ -368,8 +384,8 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                         continue
                     # Filter by coach date range
                     ts = e.get("startTimestamp", 0)
-                    if ts:
-                        match_date = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+                    match_date = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d") if ts else ""
+                    if match_date:
                         if coach_since and match_date < coach_since:
                             continue
                         if coach_until and match_date > coach_until:
@@ -411,12 +427,18 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                         "home": home,
                         "away": away,
                         "score": f"{hs}-{aws}",
+                        "_date": match_date if ts else "",
                         "goals_for": gf,
                         "goals_against": ga,
                         "result": result,
                     })
         except Exception:
             logger.exception("cup results fetch failed")
+
+        # Re-filter cup_results by coach_until (may have been updated after departure detection)
+        if coach_until and cup_results:
+            cup_results = [c for c in cup_results
+                          if not c.get("_date") or c["_date"] <= coach_until]
 
         text = format_team_data(team_data, sofa_team_stats, standings, manager, coach_name, coach_since, cup_results, coach_until)
         return text, None
