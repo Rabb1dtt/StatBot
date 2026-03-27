@@ -455,10 +455,14 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             return
 
         # Collect stats for all matching matches
+        # Sort chronologically for display (oldest first)
+        if len(target_events) > 1:
+            target_events.sort(key=lambda e: e.get("startTimestamp", 0))
+
         all_lines = []
         all_lines.append(f"Игрок: {resolved.name} ({resolved.team})")
         if len(target_events) > 1:
-            all_lines.append(f"Найдено матчей: {len(target_events)}")
+            all_lines.append(f"Найдено матчей: {len(target_events)} (хронологический порядок)")
         all_lines.append("")
 
         stat_labels = {
