@@ -127,27 +127,23 @@ class NameResolver:
 
     async def resolve(self, query: str, team_hint: Optional[str] = None) -> Optional[ResolvedPlayer]:
         """Resolve a player name query to a ResolvedPlayer.
-        team_hint: optional team name from parentheses, e.g. 'Реал Мадрид'.
+        Always uses LLM first for transliteration, then fuzzy search.
         """
-        MIN_CONFIDENT_SCORE = 75
+        best = None
 
-        results = self._fuzzy_search(query, limit=10)
-        best = self._pick_best(results, team_hint)
-
-        # If score is high enough, return immediately
-        if best and best[0] >= MIN_CONFIDENT_SCORE:
-            return self._to_resolved(*best)
-
-        # LLM fallback: transliterate/guess the name for better matching
+        # 1) LLM transliteration first — handles Cyrillic, nicknames, unusual names
         if self._llm:
             guess = await self._guess_latin_name(query)
             if guess:
                 llm_results = self._fuzzy_search(guess, limit=10)
-                llm_best = self._pick_best(llm_results, team_hint)
-                # Take LLM result if it's better
-                if llm_best:
-                    if not best or llm_best[0] > best[0]:
-                        best = llm_best
+                best = self._pick_best(llm_results, team_hint)
+
+        # 2) Also try direct fuzzy on original query — pick better of the two
+        direct_results = self._fuzzy_search(query, limit=10)
+        direct_best = self._pick_best(direct_results, team_hint)
+        if direct_best:
+            if not best or direct_best[0] > best[0]:
+                best = direct_best
 
         if best:
             return self._to_resolved(*best)
@@ -264,9 +260,18 @@ class NameResolver:
         if not self._llm:
             return None
         prompt = (
-            "Translate this football player query to Latin script name+surname. "
-            "Reply with ONLY the name, nothing else.\n"
-            f"Query: {query!r}"
+            "You are a football player name resolver. "
+            "The user gives a player name in ANY language/script/spelling/nickname. "
+            "Your job: return the player's REAL NAME in Latin script as used in official databases.\n\n"
+            "Examples:\n"
+            "- 'Нико Орайли' → 'Nico O'Reilly'\n"
+            "- 'Рюдигер' → 'Antonio Rudiger'\n"
+            "- 'Мбаппе' → 'Kylian Mbappe'\n"
+            "- 'Холанд' → 'Erling Haaland'\n"
+            "- 'Анхель ди Мария' → 'Angel Di Maria'\n"
+            "- 'Щесны' → 'Wojciech Szczesny'\n\n"
+            "Reply with ONLY the full name in Latin script, nothing else.\n"
+            f"Query: {query}"
         )
         try:
             def _call():
