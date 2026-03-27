@@ -256,6 +256,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                 mode=qtype,
                 coach_name=parsed.get("coach_name"),
                 coach_since=parsed.get("coach_since"),
+                coach_until=parsed.get("coach_until"),
             )
         elif qtype == "match":
             hint = hints[0] if hints else None
@@ -305,10 +306,10 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             for chunk in split_message(raw_text):
                 await message.answer(chunk)
 
-    async def _fetch_team_full(team_name: str, league: str, coach_name: str | None = None, coach_since: str | None = None) -> tuple[str | None, str | None]:
+    async def _fetch_team_full(team_name: str, league: str, coach_name: str | None = None, coach_since: str | None = None, coach_until: str | None = None) -> tuple[str | None, str | None]:
         """Fetch team data from Understat + SofaScore. Returns (formatted_text, error)."""
         try:
-            team_data = await team_client.get_team_season(team_name, league, coach_since=coach_since)
+            team_data = await team_client.get_team_season(team_name, league, coach_since=coach_since, coach_until=coach_until)
         except Exception as e:
             return None, f"Ошибка для {team_name}: {e}"
         if not team_data:
@@ -366,11 +367,13 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                     # Skip league matches (already in Understat data)
                     if tid == league_tid:
                         continue
-                    # Filter by coach_since date
+                    # Filter by coach date range
                     ts = e.get("startTimestamp", 0)
-                    if coach_since and ts:
+                    if ts:
                         match_date = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
-                        if match_date < coach_since:
+                        if coach_since and match_date < coach_since:
+                            continue
+                        if coach_until and match_date > coach_until:
                             continue
 
                     home = e.get("homeTeam", {}).get("name", "?")
@@ -416,7 +419,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         except Exception:
             logger.exception("cup results fetch failed")
 
-        text = format_team_data(team_data, sofa_team_stats, standings, manager, coach_name, coach_since, cup_results)
+        text = format_team_data(team_data, sofa_team_stats, standings, manager, coach_name, coach_since, cup_results, coach_until)
         return text, None
 
     async def _handle_compare_coaches(message: Message, teams: list[str], leagues: list[str]) -> None:
@@ -450,7 +453,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             for chunk in split_message(combined):
                 await message.answer(chunk)
 
-    async def _handle_team(message: Message, team_name: str, league: str | None, mode: str = "team", coach_name: str | None = None, coach_since: str | None = None) -> None:
+    async def _handle_team(message: Message, team_name: str, league: str | None, mode: str = "team", coach_name: str | None = None, coach_since: str | None = None, coach_until: str | None = None) -> None:
         """Handle coach or team season analysis."""
         if not league:
             await message.answer("Не удалось определить лигу. Уточни: 'тренер Ливерпуля АПЛ'.")
@@ -458,7 +461,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
 
         await message.answer(f"Собираю данные по {team_name}...")
 
-        raw_text, err = await _fetch_team_full(team_name, league, coach_name, coach_since)
+        raw_text, err = await _fetch_team_full(team_name, league, coach_name, coach_since, coach_until)
         if err:
             await message.answer(err)
             return

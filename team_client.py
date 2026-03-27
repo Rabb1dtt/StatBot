@@ -33,7 +33,7 @@ class TeamDataClient:
         with UnderstatClient() as usc:
             return usc.league(league=us_league).get_team_data(season=season)
 
-    async def get_team_season(self, team_name: str, league: str, season: str = "2025", coach_since: Optional[str] = None) -> Optional[Dict]:
+    async def get_team_season(self, team_name: str, league: str, season: str = "2025", coach_since: Optional[str] = None, coach_until: Optional[str] = None) -> Optional[Dict]:
         """Get a specific team's season data with aggregated stats."""
         cache_key = f"{league}:{season}"
         cached = self._cache.get(cache_key)
@@ -48,17 +48,20 @@ class TeamDataClient:
         target = team_name.lower()
         for tid, tdata in cached.items():
             if target in tdata.get("title", "").lower():
-                return self._aggregate(tdata, since_date=coach_since)
+                return self._aggregate(tdata, since_date=coach_since, until_date=coach_until)
 
         return None
 
-    def _aggregate(self, tdata: Dict, since_date: Optional[str] = None) -> Dict:
+    def _aggregate(self, tdata: Dict, since_date: Optional[str] = None, until_date: Optional[str] = None) -> Dict:
         """Aggregate per-match data into season summary.
-        since_date: if set, only include matches on or after this date (YYYY-MM-DD).
+        since_date: only include matches on or after this date.
+        until_date: only include matches on or before this date.
         """
         history = tdata.get("history", [])
         if since_date:
             history = [m for m in history if m.get("date", "")[:10] >= since_date]
+        if until_date:
+            history = [m for m in history if m.get("date", "")[:10] <= until_date]
         if not history:
             return {"title": tdata.get("title"), "matches": 0}
 
@@ -141,7 +144,7 @@ class TeamDataClient:
         }
 
 
-def format_team_data(team: Dict, sofa_team_stats: Optional[Dict] = None, standings: Optional[str] = None, manager: Optional[Dict] = None, coach_name: Optional[str] = None, coach_since: Optional[str] = None, cup_results: Optional[List[Dict]] = None) -> str:
+def format_team_data(team: Dict, sofa_team_stats: Optional[Dict] = None, standings: Optional[str] = None, manager: Optional[Dict] = None, coach_name: Optional[str] = None, coach_since: Optional[str] = None, cup_results: Optional[List[Dict]] = None, coach_until: Optional[str] = None) -> str:
     """Format team data for AI analysis."""
     lines = []
     title = team.get("title", "?")
@@ -161,8 +164,10 @@ def format_team_data(team: Dict, sofa_team_stats: Optional[Dict] = None, standin
     # Evaluation period
     first = team.get("first_date", "?")
     last = team.get("last_date", "?")
-    if coach_since:
-        lines.append(f"Период оценки: {first} — {last} (с момента назначения {coach_since})")
+    if coach_since and coach_until:
+        lines.append(f"Период оценки: {first} — {last} (назначен {coach_since}, уволен/ушёл {coach_until})")
+    elif coach_since:
+        lines.append(f"Период оценки: {first} — {last} (в клубе с {coach_since})")
     else:
         lines.append(f"Период оценки: {first} — {last}")
     lines.append(f"Матчей: {team['matches']} | {team['wins']}W {team['draws']}D {team['losses']}L | {team['points']} очков (PPG: {team['ppg']})")

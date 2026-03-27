@@ -322,9 +322,10 @@ class NameResolver:
             "3) match — user wants to see how a player performed in SPECIFIC MATCH(ES). "
             "Example: 'Орайли против Арсенала в финале кубка', 'Фоден последний матч', 'как Ямал сыграл против Реала в ЛЧ'\n"
             "4) coach — user wants to evaluate a COACH's work this season. "
-            "Extract the coach's name and the date they were appointed at this club (COACH_SINCE). "
+            "Extract the coach's name, appointment date (COACH_SINCE), and departure date (COACH_UNTIL) if they were fired/left. "
             "Use your knowledge - e.g. Arteta at Arsenal since Dec 2019, Slot at Liverpool since Jun 2024. "
-            "If unsure about exact date, give approximate (month+year). If completely unknown, use UNKNOWN.\n"
+            "If the coach is STILL at the club, COACH_UNTIL = CURRENT. "
+            "If they were fired/left, give the date. If unsure, use UNKNOWN.\n"
             "Example: 'тренер Ливерпуля', 'оценка Гвардиолы', 'как работает Анчелотти', 'coach Arteta'\n"
             "5) team — user wants TEAM season analysis. "
             "Example: 'сезон Ливерпуля', 'как играет Арсенал', 'оценка Реала', 'команда Барселона'\n"
@@ -381,10 +382,12 @@ class NameResolver:
             "LEAGUE: <league name> (for coach/team/compare_coaches)\n"
             "COACH_NAME: <coach full name> (for coach/compare_coaches)\n"
             "COACH_SINCE: <YYYY-MM-DD or UNKNOWN> (for coach/compare_coaches)\n"
+            "COACH_UNTIL: <YYYY-MM-DD or CURRENT or UNKNOWN> (for coach/compare_coaches)\n"
             "TEAM2: <second team> (for compare_coaches)\n"
             "LEAGUE2: <second league> (for compare_coaches)\n"
             "COACH_NAME2: <second coach> (for compare_coaches)\n"
-            "COACH_SINCE2: <YYYY-MM-DD or UNKNOWN> (for compare_coaches)\n\n"
+            "COACH_SINCE2: <YYYY-MM-DD or UNKNOWN> (for compare_coaches)\n"
+            "COACH_UNTIL2: <YYYY-MM-DD or CURRENT or UNKNOWN> (for compare_coaches)\n\n"
             f"Query: {query}"
         )
         try:
@@ -454,6 +457,10 @@ class NameResolver:
                     if val and val.upper() not in ("NONE", "UNKNOWN"):
                         if "coach_since" not in locals():
                             coach_since = val
+                elif key == "COACH_UNTIL":
+                    if val and val.upper() not in ("NONE", "UNKNOWN", "CURRENT"):
+                        if "coach_until" not in locals():
+                            coach_until = val
                 elif key == "TEAM2":
                     if val and val.upper() != "NONE":
                         if "teams" not in locals():
@@ -503,6 +510,7 @@ class NameResolver:
                     "league": league_name,
                     "coach_name": coach_name if "coach_name" in locals() else None,
                     "coach_since": coach_since if "coach_since" in locals() else None,
+                    "coach_until": coach_until if "coach_until" in locals() else None,
                 }
 
             if not names:
