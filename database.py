@@ -26,7 +26,7 @@ class PlayerDB:
         self.conn: Optional[sqlite3.Connection] = None
 
     def open(self) -> None:
-        self.conn = sqlite3.connect(str(self.db_path))
+        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
 
@@ -73,7 +73,7 @@ class PlayerDB:
         self.conn.commit()
         return len(rows)
 
-    def get_all_players(self) -> List[Dict]:
+    def get_all_players_for_search(self) -> List[Dict]:
         cursor = self.conn.execute(
             "SELECT understat_id, name, name_search, team, league, position FROM players"
         )
