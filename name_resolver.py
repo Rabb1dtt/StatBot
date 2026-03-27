@@ -1,4 +1,5 @@
 import asyncio
+import re
 import unicodedata
 from dataclasses import dataclass
 from typing import Optional, List, Dict
@@ -125,11 +126,51 @@ class NameResolver:
 
         return None
 
+    def _try_fast_split(self, query: str) -> Optional[dict]:
+        """Fast regex-based detection of comparison queries without LLM."""
+        q = query.strip()
+
+        # Remove "сравни"/"сравнить"/"compare" prefix
+        q_clean = re.sub(r'^(сравни(?:ть)?|compare)\s+', '', q, flags=re.IGNORECASE).strip()
+        if q_clean != q:
+            # Had a comparison prefix — split the rest
+            names = self._split_names(q_clean)
+            if len(names) >= 2:
+                return {"type": "compare", "names": names[:5]}
+
+        # Check for "vs", "против", " и " separators
+        separators = r'\s+(?:vs\.?|versus|против)\s+|\s*,\s*'
+        # " и " only if both sides look like names (not a single player with "и")
+        parts = re.split(separators, q, flags=re.IGNORECASE)
+        if len(parts) >= 2:
+            names = [p.strip() for p in parts if p.strip()]
+            if len(names) >= 2:
+                return {"type": "compare", "names": names[:5]}
+
+        # Try " и " split — but only if result has 2+ non-empty parts
+        parts = re.split(r'\s+и\s+', q, flags=re.IGNORECASE)
+        if len(parts) >= 2:
+            names = [p.strip() for p in parts if p.strip()]
+            if len(names) >= 2 and all(len(n.split()) <= 4 for n in names):
+                return {"type": "compare", "names": names[:5]}
+
+        return None
+
+    def _split_names(self, text: str) -> list[str]:
+        """Split a text like 'Салаха и Мбаппе' or 'A vs B vs C' into names."""
+        parts = re.split(r'\s+(?:vs\.?|versus|против|и)\s+|\s*,\s*', text, flags=re.IGNORECASE)
+        return [p.strip() for p in parts if p.strip()]
+
     async def parse_query(self, query: str) -> dict:
         """
         Determine if user wants single player or comparison.
         Returns: {"type": "single"|"compare", "names": [...]}
         """
+        # Try fast regex first
+        fast = self._try_fast_split(query)
+        if fast:
+            return fast
+
         if not self._llm:
             return {"type": "single", "names": [query]}
 
