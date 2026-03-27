@@ -254,6 +254,8 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                 team_name=parsed.get("team", names[0] if names else query),
                 league=parsed.get("league"),
                 mode=qtype,
+                coach_name=parsed.get("coach_name"),
+                coach_since=parsed.get("coach_since"),
             )
         elif qtype == "match":
             hint = hints[0] if hints else None
@@ -303,10 +305,10 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             for chunk in split_message(raw_text):
                 await message.answer(chunk)
 
-    async def _fetch_team_full(team_name: str, league: str) -> tuple[str | None, str | None]:
+    async def _fetch_team_full(team_name: str, league: str, coach_name: str | None = None, coach_since: str | None = None) -> tuple[str | None, str | None]:
         """Fetch team data from Understat + SofaScore. Returns (formatted_text, error)."""
         try:
-            team_data = await team_client.get_team_season(team_name, league)
+            team_data = await team_client.get_team_season(team_name, league, coach_since=coach_since)
         except Exception as e:
             return None, f"Ошибка для {team_name}: {e}"
         if not team_data:
@@ -349,7 +351,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         except Exception:
             pass
 
-        text = format_team_data(team_data, sofa_team_stats, standings, manager)
+        text = format_team_data(team_data, sofa_team_stats, standings, manager, coach_name, coach_since)
         return text, None
 
     async def _handle_compare_coaches(message: Message, teams: list[str], leagues: list[str]) -> None:
@@ -383,7 +385,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             for chunk in split_message(combined):
                 await message.answer(chunk)
 
-    async def _handle_team(message: Message, team_name: str, league: str | None, mode: str = "team") -> None:
+    async def _handle_team(message: Message, team_name: str, league: str | None, mode: str = "team", coach_name: str | None = None, coach_since: str | None = None) -> None:
         """Handle coach or team season analysis."""
         if not league:
             await message.answer("Не удалось определить лигу. Уточни: 'тренер Ливерпуля АПЛ'.")
@@ -391,7 +393,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
 
         await message.answer(f"Собираю данные по {team_name}...")
 
-        raw_text, err = await _fetch_team_full(team_name, league)
+        raw_text, err = await _fetch_team_full(team_name, league, coach_name, coach_since)
         if err:
             await message.answer(err)
             return

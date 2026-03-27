@@ -322,6 +322,9 @@ class NameResolver:
             "3) match — user wants to see how a player performed in SPECIFIC MATCH(ES). "
             "Example: 'Орайли против Арсенала в финале кубка', 'Фоден последний матч', 'как Ямал сыграл против Реала в ЛЧ'\n"
             "4) coach — user wants to evaluate a COACH's work this season. "
+            "Extract the coach's name and the date they were appointed at this club (COACH_SINCE). "
+            "Use your knowledge - e.g. Arteta at Arsenal since Dec 2019, Slot at Liverpool since Jun 2024. "
+            "If unsure about exact date, give approximate (month+year). If completely unknown, use UNKNOWN.\n"
             "Example: 'тренер Ливерпуля', 'оценка Гвардиолы', 'как работает Анчелотти', 'coach Arteta'\n"
             "5) team — user wants TEAM season analysis. "
             "Example: 'сезон Ливерпуля', 'как играет Арсенал', 'оценка Реала', 'команда Барселона'\n"
@@ -353,9 +356,9 @@ class NameResolver:
             "- 'Фоден против МЮ за карьеру' → TYPE: match, PLAYER1: Phil Foden, OPPONENT: Manchester United, TOURNAMENT: ALL, COUNT: ALL, ALL_TIME: yes\n"
             "- 'Салах последний матч' → TYPE: match, PLAYER1: Mohamed Salah, OPPONENT: NONE, COUNT: 1\n"
             "- 'как Ямал сыграл против Реала' → TYPE: match, PLAYER1: Lamine Yamal, OPPONENT: Real Madrid, TOURNAMENT: ALL, COUNT: ALL\n"
-            "- 'тренер Ливерпуля' → TYPE: coach, TEAM: Liverpool, LEAGUE: Premier League\n"
-            "- 'оценка Гвардиолы' → TYPE: coach, TEAM: Manchester City, LEAGUE: Premier League\n"
-            "- 'как работает Слот' → TYPE: coach, TEAM: Liverpool, LEAGUE: Premier League\n"
+            "- 'тренер Ливерпуля' → TYPE: coach, TEAM: Liverpool, LEAGUE: Premier League, COACH_NAME: Arne Slot, COACH_SINCE: 2024-06-01\n"
+            "- 'оценка Гвардиолы' → TYPE: coach, TEAM: Manchester City, LEAGUE: Premier League, COACH_NAME: Pep Guardiola, COACH_SINCE: 2016-07-01\n"
+            "- 'как работает Слот' → TYPE: coach, TEAM: Liverpool, LEAGUE: Premier League, COACH_NAME: Arne Slot, COACH_SINCE: 2024-06-01\n"
             "- 'сезон Арсенала' → TYPE: team, TEAM: Arsenal, LEAGUE: Premier League\n"
             "- 'как играет Барселона' → TYPE: team, TEAM: Barcelona, LEAGUE: LaLiga\n"
             "- 'Реал Мадрид сезон' → TYPE: team, TEAM: Real Madrid, LEAGUE: LaLiga\n"
@@ -376,8 +379,12 @@ class NameResolver:
             "ALL_TIME: yes|no (for match)\n"
             "TEAM: <team name in English> (for coach/team/compare_coaches)\n"
             "LEAGUE: <league name> (for coach/team/compare_coaches)\n"
+            "COACH_NAME: <coach full name> (for coach/compare_coaches)\n"
+            "COACH_SINCE: <YYYY-MM-DD or UNKNOWN> (for coach/compare_coaches)\n"
             "TEAM2: <second team> (for compare_coaches)\n"
-            "LEAGUE2: <second league> (for compare_coaches)\n\n"
+            "LEAGUE2: <second league> (for compare_coaches)\n"
+            "COACH_NAME2: <second coach> (for compare_coaches)\n"
+            "COACH_SINCE2: <YYYY-MM-DD or UNKNOWN> (for compare_coaches)\n\n"
             f"Query: {query}"
         )
         try:
@@ -439,6 +446,14 @@ class NameResolver:
                 elif key == "LEAGUE":
                     if val and val.upper() != "NONE":
                         league_name = val
+                elif key == "COACH_NAME":
+                    if val and val.upper() not in ("NONE", "UNKNOWN"):
+                        if "coach_name" not in locals():
+                            coach_name = val
+                elif key == "COACH_SINCE":
+                    if val and val.upper() not in ("NONE", "UNKNOWN"):
+                        if "coach_since" not in locals():
+                            coach_since = val
                 elif key == "TEAM2":
                     if val and val.upper() != "NONE":
                         if "teams" not in locals():
@@ -449,17 +464,33 @@ class NameResolver:
                         if "leagues" not in locals():
                             leagues = []
                         leagues.append(val)
+                elif key == "COACH_NAME2":
+                    if val and val.upper() not in ("NONE", "UNKNOWN"):
+                        if "coach_names" not in locals():
+                            coach_names = []
+                        coach_names.append(val)
+                elif key == "COACH_SINCE2":
+                    if val and val.upper() not in ("NONE", "UNKNOWN"):
+                        if "coach_sinces" not in locals():
+                            coach_sinces = []
+                        coach_sinces.append(val)
 
             # Compare coaches/teams
             if qtype == "compare_coaches" and team_name:
                 team_list = [team_name] + (teams if "teams" in locals() else [])
                 league_list = [league_name] + (leagues if "leagues" in locals() else [])
+                cn = [coach_name] if "coach_name" in locals() else []
+                cn += coach_names if "coach_names" in locals() else []
+                cs = [coach_since] if "coach_since" in locals() else []
+                cs += coach_sinces if "coach_sinces" in locals() else []
                 return {
                     "type": "compare_coaches",
                     "names": team_list,
                     "team_hints": [None] * len(team_list),
                     "teams": team_list,
                     "leagues": league_list,
+                    "coach_names": cn,
+                    "coach_sinces": cs,
                 }
 
             # Coach/team queries
@@ -470,6 +501,8 @@ class NameResolver:
                     "team_hints": [None],
                     "team": team_name,
                     "league": league_name,
+                    "coach_name": coach_name if "coach_name" in locals() else None,
+                    "coach_since": coach_since if "coach_since" in locals() else None,
                 }
 
             if not names:

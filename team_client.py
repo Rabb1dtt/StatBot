@@ -33,7 +33,7 @@ class TeamDataClient:
         with UnderstatClient() as usc:
             return usc.league(league=us_league).get_team_data(season=season)
 
-    async def get_team_season(self, team_name: str, league: str, season: str = "2025") -> Optional[Dict]:
+    async def get_team_season(self, team_name: str, league: str, season: str = "2025", coach_since: Optional[str] = None) -> Optional[Dict]:
         """Get a specific team's season data with aggregated stats."""
         cache_key = f"{league}:{season}"
         cached = self._cache.get(cache_key)
@@ -48,13 +48,17 @@ class TeamDataClient:
         target = team_name.lower()
         for tid, tdata in cached.items():
             if target in tdata.get("title", "").lower():
-                return self._aggregate(tdata)
+                return self._aggregate(tdata, since_date=coach_since)
 
         return None
 
-    def _aggregate(self, tdata: Dict) -> Dict:
-        """Aggregate per-match data into season summary."""
+    def _aggregate(self, tdata: Dict, since_date: Optional[str] = None) -> Dict:
+        """Aggregate per-match data into season summary.
+        since_date: if set, only include matches on or after this date (YYYY-MM-DD).
+        """
         history = tdata.get("history", [])
+        if since_date:
+            history = [m for m in history if m.get("date", "")[:10] >= since_date]
         if not history:
             return {"title": tdata.get("title"), "matches": 0}
 
@@ -130,15 +134,25 @@ class TeamDataClient:
         }
 
 
-def format_team_data(team: Dict, sofa_team_stats: Optional[Dict] = None, standings: Optional[str] = None, manager: Optional[Dict] = None) -> str:
+def format_team_data(team: Dict, sofa_team_stats: Optional[Dict] = None, standings: Optional[str] = None, manager: Optional[Dict] = None, coach_name: Optional[str] = None, coach_since: Optional[str] = None) -> str:
     """Format team data for AI analysis."""
     lines = []
     title = team.get("title", "?")
     lines.append(f"*Команда: {title}*")
-    if manager:
-        mgr_name = manager.get("name", "?")
-        mgr_country = manager.get("country", {}).get("name", "")
-        lines.append(f"Тренер: {mgr_name}" + (f" ({mgr_country})" if mgr_country else ""))
+    # Coach info
+    mgr_display = coach_name
+    if not mgr_display and manager:
+        mgr_display = manager.get("name")
+    if mgr_display:
+        coach_line = f"Тренер: {mgr_display}"
+        if manager:
+            country = manager.get("country", {}).get("name", "")
+            if country:
+                coach_line += f" ({country})"
+        if coach_since:
+            coach_line += f" | в клубе с {coach_since}"
+            coach_line += " | ДАННЫЕ ОТФИЛЬТРОВАНЫ с этой даты"
+        lines.append(coach_line)
     lines.append(f"Матчей: {team['matches']} | {team['wins']}W {team['draws']}D {team['losses']}L | {team['points']} очков (PPG: {team['ppg']})")
     lines.append(f"Голы: {team['goals']} забито, {team['conceded']} пропущено (разница: {team['gd']})")
     lines.append("")
