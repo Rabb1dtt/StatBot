@@ -264,9 +264,19 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                 return
             player_texts.append(text)
 
+        # Check AI cache for this comparison
+        compare_key = "compare:" + "|".join(sorted(t[:32] for t in player_texts))
+        cached_ai = ai_result_cache.get(compare_key)
+        if cached_ai:
+            logger.info("AI compare cache hit")
+            for chunk in split_message(cached_ai):
+                await message.answer(chunk, parse_mode=ParseMode.HTML)
+            return
+
         final_text = await analyzer.compare(player_texts)
         if final_text:
             result = md_to_html(final_text)
+            ai_result_cache[compare_key] = result
             for chunk in split_message(result):
                 await message.answer(chunk, parse_mode=ParseMode.HTML)
         else:
