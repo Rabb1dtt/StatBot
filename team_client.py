@@ -62,6 +62,11 @@ class TeamDataClient:
         if not history:
             return {"title": tdata.get("title"), "matches": 0}
 
+        # Period
+        dates = sorted(m.get("date", "")[:10] for m in history if m.get("date"))
+        first_date = dates[0] if dates else "?"
+        last_date = dates[-1] if dates else "?"
+
         total_xg = sum(m["xG"] for m in history)
         total_xga = sum(m["xGA"] for m in history)
         total_npxg = sum(m["npxG"] for m in history)
@@ -131,6 +136,8 @@ class TeamDataClient:
             "deep_allowed": total_deep_allowed,
             "deep_per_match": round(total_deep / max(matches, 1), 1),
             "form": form,
+            "first_date": first_date,
+            "last_date": last_date,
         }
 
 
@@ -149,10 +156,15 @@ def format_team_data(team: Dict, sofa_team_stats: Optional[Dict] = None, standin
             country = manager.get("country", {}).get("name", "")
             if country:
                 coach_line += f" ({country})"
-        if coach_since:
-            coach_line += f" | в клубе с {coach_since}"
-            coach_line += " | ДАННЫЕ ОТФИЛЬТРОВАНЫ с этой даты"
         lines.append(coach_line)
+
+    # Evaluation period
+    first = team.get("first_date", "?")
+    last = team.get("last_date", "?")
+    if coach_since:
+        lines.append(f"Период оценки: {first} — {last} (с момента назначения {coach_since})")
+    else:
+        lines.append(f"Период оценки: {first} — {last}")
     lines.append(f"Матчей: {team['matches']} | {team['wins']}W {team['draws']}D {team['losses']}L | {team['points']} очков (PPG: {team['ppg']})")
     lines.append(f"Голы: {team['goals']} забито, {team['conceded']} пропущено (разница: {team['gd']})")
     lines.append("")
