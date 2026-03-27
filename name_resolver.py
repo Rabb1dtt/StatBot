@@ -217,8 +217,13 @@ class NameResolver:
             r'в\s+(?:бундеслиге|bundesliga)': 'Bundesliga',
             r'в\s+(?:лиге\s+1|ligue\s+1)': 'Ligue 1',
             r'в\s+(?:рпл)': 'Premier League',  # Russian PL
-            r'в\s+(?:кубке\s+англии|fa\s+cup)': 'FA Cup',
-            r'в\s+(?:кубке|кубке\s+лиги|carabao)': 'EFL Cup',
+            r'в\s+(?:финале\s+)?(?:кубке?\s+англии|fa\s+cup)': 'FA Cup',
+            r'в\s+(?:финале\s+)?(?:кубке?\s+лиги|кубке?\s+карабао|carabao|efl\s+cup)': 'EFL Cup',
+            r'в\s+(?:финале\s+)?(?:кубке?\s+испании|copa\s+del\s+rey)': 'Copa del Rey',
+            r'в\s+(?:финале\s+)?(?:кубке?\s+германии|dfb\s+pokal)': 'DFB Pokal',
+            r'в\s+(?:финале\s+)?(?:кубке?\s+италии|coppa\s+italia)': 'Coppa Italia',
+            r'в\s+(?:финале\s+)?(?:кубке?\s+франции|coupe\s+de\s+france)': 'Coupe de France',
+            r'в\s+(?:финале\s+)?кубк[еау]': 'EFL Cup',  # generic "в кубке" / "в финале кубка"
             r'в\s+лиге(?!\s+(?:чемпионов|европы))': 'league',  # generic "в лиге"
         }
         for pattern, name in tourney_patterns.items():
