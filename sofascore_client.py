@@ -2,8 +2,19 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from curl_cffi.requests import AsyncSession
 from cachetools import TTLCache
+
+try:
+    from curl_cffi.requests import AsyncSession as CurlSession
+    HAS_CURL_CFFI = True
+except ImportError:
+    CurlSession = None
+    HAS_CURL_CFFI = False
+
+try:
+    import httpx
+except ImportError:
+    httpx = None
 
 logger = logging.getLogger(__name__)
 
@@ -26,24 +37,40 @@ class SofascoreClient:
     """Fetches detailed player stats (dribbling, duels, etc.) from SofaScore API."""
 
     def __init__(self) -> None:
-        self._session: Optional[AsyncSession] = None
+        self._session = None  # curl_cffi or httpx
         self._stats_cache: TTLCache = TTLCache(maxsize=2048, ttl=CACHE_TTL)
         self._id_cache: TTLCache = TTLCache(maxsize=2048, ttl=CACHE_TTL)
         self._season_cache: Dict[int, int] = {}  # tournament_id -> season_id
         self._standings_cache: TTLCache = TTLCache(maxsize=32, ttl=CACHE_TTL)
+        self._use_curl = HAS_CURL_CFFI
 
     async def start(self) -> None:
-        if self._session is None:
-            self._session = AsyncSession(impersonate="chrome", timeout=15)
+        if self._session is not None:
+            return
+        if self._use_curl:
+            self._session = CurlSession(impersonate="chrome", timeout=15)
+            logger.info("SofaScore: using curl_cffi")
+        elif httpx:
+            self._session = httpx.AsyncClient(
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"},
+                follow_redirects=True, timeout=15.0,
+            )
+            logger.info("SofaScore: using httpx (curl_cffi not available)")
 
     async def close(self) -> None:
         if self._session:
-            await self._session.close()
+            if self._use_curl:
+                await self._session.close()
+            else:
+                await self._session.aclose()
             self._session = None
 
     async def _get(self, path: str) -> Optional[Dict]:
         if self._session is None:
             await self.start()
+        if self._session is None:
+            logger.error("SofaScore: no HTTP client available")
+            return None
         try:
             url = f"{BASE}{path}" if path.startswith("/") else path
             resp = await self._session.get(url)

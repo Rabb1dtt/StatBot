@@ -406,15 +406,11 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             await message.answer("Не нашёл матчей.")
             return
 
-        # Transliterate opponent name for matching
+        # Opponent name for matching (Sonnet already returns English names)
         opp_lower = None
         if opponent:
-            opp_latin = opponent
-            if resolver._llm:
-                guess = await resolver._guess_latin_name(opponent)
-                if guess:
-                    opp_latin = guess
-            opp_lower = opp_latin.lower()
+            opp_lower = opponent.lower()
+            logger.info("Match filter: opponent=%s, tournament=%s, count=%s", opponent, tournament_filter, count)
 
         # Transliterate tournament filter
         tourney_lower = None
@@ -443,6 +439,9 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         # No filters and nothing found → take last match
         if not target_events and not opponent:
             target_events = [all_events[0]]
+
+        logger.info("Match search: %d events total, %d after filter (opp=%s, tour=%s)",
+                     len(all_events), len(target_events), opp_lower, tourney_lower)
 
         # Apply count limit
         if count and count > 0:
