@@ -104,6 +104,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
     resolver.rebuild_index()
     analyzer = AIAnalyzer()
     player_text_cache: TTLCache = TTLCache(maxsize=256, ttl=24 * 60 * 60)
+    ai_result_cache: TTLCache = TTLCache(maxsize=256, ttl=24 * 60 * 60)
 
     @dp.message(CommandStart())
     async def on_start(message: Message) -> None:
@@ -197,8 +198,19 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             await message.answer(err)
             return
 
+        # Check AI cache
+        ai_cache_key = f"single:{raw_text[:64]}"
+        cached_ai = ai_result_cache.get(ai_cache_key)
+        if cached_ai:
+            logger.info("AI cache hit for %s", name)
+            for chunk in split_message(cached_ai):
+                await message.answer(chunk, parse_mode=None)
+            return
+
         final_text = await analyzer.analyze(raw_text)
         text = final_text or raw_text
+        if final_text:
+            ai_result_cache[ai_cache_key] = final_text
         for chunk in split_message(text):
             await message.answer(chunk, parse_mode=None if final_text else ParseMode.MARKDOWN)
 
