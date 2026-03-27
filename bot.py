@@ -16,7 +16,7 @@ from understat_client import UnderstatPlayerClient
 from name_resolver import NameResolver
 from cachetools import TTLCache
 from stats_formatter import format_player_stats, format_match_breakdown
-from sofascore_client import SofascoreClient, format_sofascore_extra
+from sofascore_client import SofascoreClient, format_sofascore_extra, format_cup_matches, CUP_TOURNAMENT_IDS
 from ai_analyzer import AIAnalyzer
 
 
@@ -193,6 +193,19 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                 text += "\n\n" + extra
         except Exception:
             logger.exception("sofascore fetch failed")
+
+        # Add cup/european match stats
+        try:
+            sofa_player = await sofa.search_player(resolved.name)
+            if sofa_player:
+                cup_matches = await sofa.get_cup_match_stats(
+                    sofa_player["id"], CUP_TOURNAMENT_IDS, max_matches=15,
+                )
+                cup_text = format_cup_matches(cup_matches)
+                if cup_text:
+                    text += "\n\n" + cup_text
+        except Exception:
+            logger.exception("cup stats fetch failed")
 
         # Add league standings top 10
         try:

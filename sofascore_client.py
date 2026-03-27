@@ -177,6 +177,164 @@ class SofascoreClient:
         self._standings_cache[league] = result
         return result
 
+    # ── Player tournaments & per-match stats ────────────────────────
+
+    async def get_player_tournaments(self, player_id: int) -> List[Dict]:
+        """Get all tournaments/seasons a player participated in."""
+        data = await self._get(f"/player/{player_id}/statistics/seasons")
+        if not data:
+            return []
+        result = []
+        for entry in data.get("uniqueTournamentSeasons", []):
+            ut = entry.get("uniqueTournament", {})
+            for s in entry.get("seasons", []):
+                result.append({
+                    "tournament_id": ut.get("id"),
+                    "tournament_name": ut.get("name", ""),
+                    "season_id": s.get("id"),
+                    "season_name": s.get("name", ""),
+                })
+        return result
+
+    async def get_player_tournament_aggregate(
+        self, player_id: int, tournament_id: int, season_id: int,
+    ) -> Optional[Dict]:
+        """Get aggregate stats for a player in a specific tournament/season."""
+        data = await self._get(
+            f"/player/{player_id}/unique-tournament/{tournament_id}/season/{season_id}/statistics/overall"
+        )
+        if not data:
+            return None
+        return data.get("statistics", {})
+
+    async def get_player_events(self, player_id: int, page: int = 0) -> List[Dict]:
+        """Get recent events (matches) for a player. Page 0 = most recent."""
+        data = await self._get(f"/player/{player_id}/events/last/{page}")
+        if not data:
+            return []
+        return data.get("events", [])
+
+    async def get_player_event_stats(self, event_id: int, player_id: int) -> Optional[Dict]:
+        """Get per-match stats for a specific player in a specific event."""
+        data = await self._get(f"/event/{event_id}/player/{player_id}/statistics")
+        if not data:
+            return None
+        return data.get("statistics", {})
+
+    async def get_cup_match_stats(
+        self, player_id: int, tournament_ids: set[int], max_matches: int = 20,
+    ) -> List[Dict]:
+        """
+        Get per-match stats for cup/european matches.
+        Returns list of {tournament, round, opponent, score, stats}.
+        """
+        all_events = []
+        for page in range(3):  # up to 3 pages of events
+            events = await self.get_player_events(player_id, page)
+            if not events:
+                break
+            all_events.extend(events)
+
+        # Filter to requested tournaments
+        cup_events = [
+            e for e in all_events
+            if e.get("tournament", {}).get("uniqueTournament", {}).get("id") in tournament_ids
+        ]
+
+        results = []
+        for e in cup_events[:max_matches]:
+            event_id = e["id"]
+            tournament = e.get("tournament", {}).get("uniqueTournament", {}).get("name", "?")
+            round_info = e.get("roundInfo", {})
+            round_name = round_info.get("name", round_info.get("round", "?"))
+            home = e.get("homeTeam", {}).get("name", "?")
+            away = e.get("awayTeam", {}).get("name", "?")
+            h_score = e.get("homeScore", {}).get("current", "?")
+            a_score = e.get("awayScore", {}).get("current", "?")
+
+            # Determine if this is a knockout/final stage
+            stage = ""
+            rn = str(round_name).lower()
+            if any(k in rn for k in ["final", "финал"]):
+                stage = "ФИНАЛ"
+            elif any(k in rn for k in ["semi", "полуфинал"]):
+                stage = "ПОЛУФИНАЛ"
+            elif any(k in rn for k in ["quarter", "четвертьфинал"]):
+                stage = "ЧЕТВЕРТЬФИНАЛ"
+            elif any(k in rn for k in ["round of 16", "1/8"]):
+                stage = "1/8 ФИНАЛА"
+            elif "knockout" in rn:
+                stage = "ПЛЕЙ-ОФФ"
+
+            # Fetch per-match stats
+            stats = await self.get_player_event_stats(event_id, player_id)
+
+            results.append({
+                "tournament": tournament,
+                "round": str(round_name),
+                "stage": stage,
+                "home": home,
+                "away": away,
+                "score": f"{h_score}-{a_score}",
+                "stats": stats or {},
+            })
+
+        return results
+
+
+# ── Cup/European tournament IDs ────────────────────────────────
+CUP_TOURNAMENT_IDS = {
+    # European
+    7,    # Champions League
+    679,  # Europa League
+    17015,  # Conference League
+    # Domestic cups
+    19,   # FA Cup
+    21,   # EFL Cup / Carabao
+    329,  # Copa del Rey
+    217,  # DFB Pokal
+    328,  # Coppa Italia
+    335,  # Coupe de France
+}
+
+
+def format_cup_matches(matches: List[Dict]) -> str:
+    """Format cup/european match stats for AI analysis."""
+    if not matches:
+        return ""
+
+    lines = ["*Кубки и еврокубки (поматчево, SofaScore):*"]
+
+    for m in matches:
+        stage_tag = f" [{m['stage']}]" if m["stage"] else ""
+        s = m["stats"]
+        mins = s.get("minutesPlayed", 0)
+        rating = s.get("rating", "—")
+        goals = s.get("goals", 0) or 0
+        assists = s.get("goalAssist", 0) or 0
+        xg = s.get("expectedGoals")
+        xa = s.get("expectedAssists")
+        tackles = s.get("tackles", 0) or 0
+        dribbles = s.get("successfulDribbles", 0) or 0
+        duels_won = s.get("duelWon", 0) or 0
+        passes = s.get("accuratePass", 0) or 0
+        total_pass = s.get("totalPass", 0) or 0
+
+        xg_str = f"xG {xg:.2f}" if xg else ""
+        xa_str = f"xA {xa:.2f}" if xa else ""
+        xg_xa = f" | {xg_str} {xa_str}".strip(" |") if (xg_str or xa_str) else ""
+
+        lines.append(
+            f"  {m['tournament']} R{m['round']}{stage_tag}: "
+            f"{m['home']} {m['score']} {m['away']}"
+        )
+        lines.append(
+            f"    {mins}мин | рейтинг {rating} | {goals}г {assists}а{xg_xa} | "
+            f"отб {tackles} дриб {dribbles} ед {duels_won} пас {passes}/{total_pass}"
+        )
+
+    return "\n".join(lines)
+
 
 POSITION_NAMES = {
     "GK": "Вратарь", "DR": "Правый защитник", "DL": "Левый защитник",
