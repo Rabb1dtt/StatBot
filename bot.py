@@ -91,8 +91,18 @@ async def create_bot() -> tuple[Bot, Dispatcher, FotmobClient, NameResolver]:
     async def on_start(message: Message) -> None:
         await message.answer(
             "Привет! Отправь имя футболиста — пришлю статистику за текущий сезон.\n"
-            "Можно на русском или латиницей. Например: Салах, Mbappe, Холанд"
+            "Можно сравнить двух игроков: «Салах vs Мбаппе» или «сравни Холанда и Палмера»"
         )
+
+    async def _fetch_player(name: str) -> tuple[str | None, str | None]:
+        """Resolve + fetch + format a single player. Returns (formatted_text, error)."""
+        resolved = await resolver.resolve(name)
+        if not resolved:
+            return None, f"Не нашёл игрока «{name}»."
+        player_data = await fc.get_player(resolved.player_id, resolved.name)
+        if not player_data:
+            return None, f"Статистика «{resolved.name}» не найдена."
+        return format_player(player_data), None
 
     @dp.message(F.text)
     async def handle_query(message: Message) -> None:
@@ -103,36 +113,65 @@ async def create_bot() -> tuple[Bot, Dispatcher, FotmobClient, NameResolver]:
             await message.answer("Нужен текстовый запрос с именем игрока.")
             return
 
-        await message.answer("Ищу игрока, секунду...")
-        try:
-            resolved = await resolver.resolve(query)
-        except Exception as e:
-            logger.exception("resolve failed")
-            await message.answer(f"Ошибка поиска: {type(e).__name__}: {e}")
-            return
-
-        if not resolved:
-            await message.answer("Не нашёл такого игрока. Попробуй уточнить имя.")
-            return
+        await message.answer("Анализирую запрос...")
 
         try:
-            player_data = await fc.get_player(resolved.player_id, resolved.name)
+            parsed = await resolver.parse_query(query)
+        except Exception:
+            logger.exception("parse_query failed")
+            parsed = {"type": "single", "names": [query]}
+
+        qtype = parsed["type"]
+        names = parsed["names"]
+
+        if qtype == "compare" and len(names) >= 2:
+            await _handle_compare(message, names[0], names[1])
+        else:
+            await _handle_single(message, names[0] if names else query)
+
+    async def _handle_single(message: Message, name: str) -> None:
+        try:
+            raw_text, err = await _fetch_player(name)
         except Exception as e:
-            logger.exception("player fetch failed")
-            await message.answer(f"Не удалось получить статистику: {type(e).__name__}: {e}")
+            logger.exception("fetch failed")
+            await message.answer(f"Ошибка: {type(e).__name__}: {e}")
             return
 
-        if not player_data:
-            await message.answer("Статистика не найдена.")
+        if err:
+            await message.answer(err)
             return
 
-        raw_text = format_player(player_data)
         final_text = await analyzer.analyze(raw_text)
+        text = final_text or raw_text
+        for chunk in split_message(text):
+            await message.answer(chunk, parse_mode=None if final_text else ParseMode.MARKDOWN)
+
+    async def _handle_compare(message: Message, name1: str, name2: str) -> None:
+        await message.answer(f"Ищу {name1} и {name2}...")
+
+        try:
+            text1, err1 = await _fetch_player(name1)
+            text2, err2 = await _fetch_player(name2)
+        except Exception as e:
+            logger.exception("compare fetch failed")
+            await message.answer(f"Ошибка: {type(e).__name__}: {e}")
+            return
+
+        if err1:
+            await message.answer(err1)
+            return
+        if err2:
+            await message.answer(err2)
+            return
+
+        final_text = await analyzer.compare(text1, text2)
         if final_text:
             for chunk in split_message(final_text):
                 await message.answer(chunk, parse_mode=None)
         else:
-            for chunk in split_message(raw_text):
+            # Fallback: just show both raw stats
+            combined = f"=== ИГРОК 1 ===\n{text1}\n\n=== ИГРОК 2 ===\n{text2}"
+            for chunk in split_message(combined):
                 await message.answer(chunk)
 
     return bot, dp, fc, resolver
