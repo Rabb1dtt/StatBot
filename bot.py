@@ -13,6 +13,7 @@ from database import PlayerDB
 from understat_sync import sync_player_ids_async
 from understat_client import UnderstatPlayerClient
 from name_resolver import NameResolver
+from cachetools import TTLCache
 from stats_formatter import format_player_stats, format_match_breakdown
 from sofascore_client import SofascoreClient, format_sofascore_extra
 from ai_analyzer import AIAnalyzer
@@ -102,6 +103,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
     resolver = NameResolver(db)
     resolver.rebuild_index()
     analyzer = AIAnalyzer()
+    player_text_cache: TTLCache = TTLCache(maxsize=256, ttl=24 * 60 * 60)
 
     @dp.message(CommandStart())
     async def on_start(message: Message) -> None:
@@ -113,10 +115,16 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         )
 
     async def _fetch_stats(name: str) -> tuple[str | None, str | None]:
-        """Resolve + fetch stats. Returns (formatted_text, error)."""
+        """Resolve + fetch stats. Returns (formatted_text, error). Cached 24h by player ID."""
         resolved = await resolver.resolve(name)
         if not resolved:
             return None, f"Не нашёл игрока «{name}». Доступны 6 лиг: EPL, La Liga, Serie A, Bundesliga, Ligue 1, РПЛ."
+
+        # Check cache
+        cached = player_text_cache.get(resolved.understat_id)
+        if cached:
+            logger.info("Cache hit: %s (id=%d)", resolved.name, resolved.understat_id)
+            return cached, None
 
         season = await usc.get_current_season(resolved.understat_id)
         if not season:
@@ -148,6 +156,8 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         except Exception:
             logger.exception("sofascore fetch failed")
 
+        # Cache the final text
+        player_text_cache[resolved.understat_id] = text
         return text, None
 
     @dp.message(F.text)
