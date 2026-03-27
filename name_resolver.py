@@ -92,12 +92,14 @@ class NameResolver:
                 if uid not in best_results or score > best_results[uid][0]:
                     best_results[uid] = (score, player)
 
-        # Sort by score descending
+        # Sort by score descending, return (score, player) tuples
         sorted_results = sorted(best_results.values(), key=lambda x: x[0], reverse=True)
-        return [p for _, p in sorted_results[:limit]]
+        return sorted_results[:limit]
 
-    def _pick_best(self, results: List[Dict], team_hint: Optional[str] = None) -> Optional[Dict]:
-        """Pick the best result, boosting matches with team_hint."""
+    def _pick_best(
+        self, results: List[tuple], team_hint: Optional[str] = None,
+    ) -> Optional[tuple]:
+        """Pick the best (score, player) result, boosting team_hint matches."""
         if not results:
             return None
         if not team_hint or len(results) == 1:
@@ -107,43 +109,48 @@ class NameResolver:
         hint_lower = _normalize(team_hint)
         hint_latin = _normalize(_transliterate(team_hint))
 
-        for r in results:
-            team = _normalize(r.get("team", ""))
+        for score, player in results:
+            team = _normalize(player.get("team", ""))
             if hint_lower in team or hint_latin in team or team in hint_lower or team in hint_latin:
-                return r
+                return (score, player)
         # No team match — return first (best fuzzy)
         return results[0]
+
+    def _to_resolved(self, score: float, player: Dict) -> ResolvedPlayer:
+        return ResolvedPlayer(
+            understat_id=player["understat_id"],
+            name=player["name"],
+            team=player.get("team", ""),
+            league=player.get("league", ""),
+            position=player.get("position", ""),
+        )
 
     async def resolve(self, query: str, team_hint: Optional[str] = None) -> Optional[ResolvedPlayer]:
         """Resolve a player name query to a ResolvedPlayer.
         team_hint: optional team name from parentheses, e.g. 'Реал Мадрид'.
         """
+        MIN_CONFIDENT_SCORE = 75
+
         results = self._fuzzy_search(query, limit=10)
         best = self._pick_best(results, team_hint)
-        if best:
-            return ResolvedPlayer(
-                understat_id=best["understat_id"],
-                name=best["name"],
-                team=best.get("team", ""),
-                league=best.get("league", ""),
-                position=best.get("position", ""),
-            )
 
-        # LLM fallback: transliterate/guess the name
+        # If score is high enough, return immediately
+        if best and best[0] >= MIN_CONFIDENT_SCORE:
+            return self._to_resolved(*best)
+
+        # LLM fallback: transliterate/guess the name for better matching
         if self._llm:
             guess = await self._guess_latin_name(query)
             if guess:
-                results = self._fuzzy_search(guess, limit=10)
-                best = self._pick_best(results, team_hint)
-                if best:
-                    return ResolvedPlayer(
-                        understat_id=best["understat_id"],
-                        name=best["name"],
-                        team=best.get("team", ""),
-                        league=best.get("league", ""),
-                        position=best.get("position", ""),
-                    )
+                llm_results = self._fuzzy_search(guess, limit=10)
+                llm_best = self._pick_best(llm_results, team_hint)
+                # Take LLM result if it's better
+                if llm_best:
+                    if not best or llm_best[0] > best[0]:
+                        best = llm_best
 
+        if best:
+            return self._to_resolved(*best)
         return None
 
     def _try_fast_split(self, query: str) -> Optional[dict]:
