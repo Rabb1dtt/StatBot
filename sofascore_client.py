@@ -311,6 +311,104 @@ def format_sofascore_extra(stats: Dict) -> str:
 
     if has_att:
         lines.extend(att_lines)
+        lines.append("")
+
+    # === Passing ===
+    pass_lines = ["*Пасы (SofaScore):*"]
+    has_pass = False
+
+    acc_passes = stats.get("accuratePasses")
+    total_passes = stats.get("totalPasses")
+    acc_pct = stats.get("accuratePassesPercentage")
+    if acc_passes is not None and total_passes is not None:
+        s = f"  Точные пасы: {acc_passes}/{total_passes}"
+        if acc_pct is not None:
+            s += f" ({acc_pct:.1f}%)"
+        pass_lines.append(s)
+        has_pass = True
+
+    acc_long = stats.get("accurateLongBalls")
+    total_long = stats.get("totalLongBalls")
+    long_pct = stats.get("accurateLongBallsPercentage")
+    if acc_long is not None and total_long is not None:
+        s = f"  Длинные передачи: {acc_long}/{total_long}"
+        if long_pct is not None:
+            s += f" ({long_pct:.1f}%)"
+        pass_lines.append(s)
+        has_pass = True
+
+    acc_cross = stats.get("accurateCrosses")
+    total_cross = stats.get("totalCross")
+    if acc_cross is not None and total_cross is not None:
+        pass_lines.append(f"  Кроссы: {acc_cross}/{total_cross} точных")
+        has_pass = True
+
+    acc_ft = stats.get("accurateFinalThirdPasses")
+    if acc_ft is not None:
+        pass_lines.append(f"  Точные пасы в финальную треть: {acc_ft}")
+        has_pass = True
+
+    opp_half = stats.get("accurateOppositionHalfPasses")
+    own_half = stats.get("accurateOwnHalfPasses")
+    if opp_half is not None and own_half is not None:
+        pass_lines.append(f"  Пасы на чужой половине: {opp_half} | На своей: {own_half}")
+        has_pass = True
+
+    key_passes = stats.get("keyPasses")
+    if key_passes is not None:
+        pass_lines.append(f"  Ключевые передачи: {key_passes}")
+        has_pass = True
+
+    if has_pass:
+        lines.extend(pass_lines)
+        lines.append("")
+
+    # === Extra details ===
+    extra_lines = ["*Прочее (SofaScore):*"]
+    has_extra = False
+
+    offsides = stats.get("offsides")
+    if offsides is not None and offsides > 0:
+        extra_lines.append(f"  Офсайды: {offsides}")
+        has_extra = True
+
+    woodwork = stats.get("hitWoodwork")
+    if woodwork is not None and woodwork > 0:
+        extra_lines.append(f"  Попадания в штангу/перекладину: {woodwork}")
+        has_extra = True
+
+    errors_goal = stats.get("errorLeadToGoal")
+    errors_shot = stats.get("errorLeadToShot")
+    if (errors_goal and errors_goal > 0) or (errors_shot and errors_shot > 0):
+        extra_lines.append(f"  Ошибки → гол: {errors_goal or 0} | Ошибки → удар: {errors_shot or 0}")
+        has_extra = True
+
+    scoring_freq = stats.get("scoringFrequency")
+    if scoring_freq is not None and scoring_freq > 0:
+        extra_lines.append(f"  Частота голов: каждые {scoring_freq} минут")
+        has_extra = True
+
+    penalty_won = stats.get("penaltyWon")
+    if penalty_won is not None and penalty_won > 0:
+        extra_lines.append(f"  Заработано пенальти: {penalty_won}")
+        has_extra = True
+
+    # Goalkeeper stats
+    saves = stats.get("saves")
+    if saves is not None and saves > 0:
+        saves_caught = stats.get("savesCaught") or 0
+        saves_parried = stats.get("savesParried") or 0
+        goals_conceded = stats.get("goalsConceded") or 0
+        clean_sheets = stats.get("cleanSheet") or 0
+        penalty_save = stats.get("penaltySave") or 0
+        extra_lines.append(f"  Сейвы: {saves} (поймано {saves_caught}, отбито {saves_parried})")
+        extra_lines.append(f"  Пропущено: {goals_conceded} | Сухие матчи: {clean_sheets}")
+        if penalty_save > 0:
+            extra_lines.append(f"  Отбито пенальти: {penalty_save}")
+        has_extra = True
+
+    if has_extra:
+        lines.extend(extra_lines)
 
     if not lines:
         return ""
