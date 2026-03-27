@@ -138,19 +138,18 @@ class NameResolver:
             if len(names) >= 2:
                 return {"type": "compare", "names": names[:5]}
 
-        # Check for "vs", "против", " и " separators
+        # Check for "vs", "против", comma separators
         separators = r'\s+(?:vs\.?|versus|против)\s+|\s*,\s*'
-        # " и " only if both sides look like names (not a single player with "и")
         parts = re.split(separators, q, flags=re.IGNORECASE)
         if len(parts) >= 2:
-            names = [p.strip() for p in parts if p.strip()]
+            names = [self._clean_name(p) for p in parts if p.strip()]
             if len(names) >= 2:
                 return {"type": "compare", "names": names[:5]}
 
         # Try " и " split — but only if result has 2+ non-empty parts
         parts = re.split(r'\s+и\s+', q, flags=re.IGNORECASE)
         if len(parts) >= 2:
-            names = [p.strip() for p in parts if p.strip()]
+            names = [self._clean_name(p) for p in parts if p.strip()]
             if len(names) >= 2 and all(len(n.split()) <= 4 for n in names):
                 return {"type": "compare", "names": names[:5]}
 
@@ -159,7 +158,11 @@ class NameResolver:
     def _split_names(self, text: str) -> list[str]:
         """Split a text like 'Салаха и Мбаппе' or 'A vs B vs C' into names."""
         parts = re.split(r'\s+(?:vs\.?|versus|против|и)\s+|\s*,\s*', text, flags=re.IGNORECASE)
-        return [p.strip() for p in parts if p.strip()]
+        return [self._clean_name(p) for p in parts if p.strip()]
+
+    def _clean_name(self, name: str) -> str:
+        """Remove team hints in parentheses: 'Винисиус (Реал Мадрид)' → 'Винисиус'."""
+        return re.sub(r'\s*\([^)]*\)\s*', ' ', name).strip()
 
     async def parse_query(self, query: str) -> dict:
         """
