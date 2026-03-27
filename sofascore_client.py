@@ -123,50 +123,164 @@ class SofascoreClient:
             return None
 
         stats = data.get("statistics", {})
+
+        # Enrich with player profile data (positions)
+        profile = await self._get(f"/player/{player_id}")
+        if profile:
+            p = profile.get("player", {})
+            stats["_positions_detailed"] = p.get("positionsDetailed", [])
+            stats["_position"] = p.get("position", "")
+
         self._stats_cache[cache_key] = stats
         return stats
 
 
+POSITION_NAMES = {
+    "GK": "Вратарь", "DR": "Правый защитник", "DL": "Левый защитник",
+    "DC": "Центральный защитник", "DM": "Опорный полузащитник",
+    "MC": "Центральный полузащитник", "MR": "Правый полузащитник",
+    "ML": "Левый полузащитник", "AM": "Атакующий полузащитник",
+    "AMR": "Правый вингер", "AML": "Левый вингер",
+    "FW": "Нападающий", "F": "Нападающий", "FC": "Центрфорвард",
+    "M": "Полузащитник", "D": "Защитник",
+}
+
+
 def format_sofascore_extra(stats: Dict) -> str:
-    """Format SofaScore stats into a dribbling/duels block for AI."""
+    """Format SofaScore stats into detailed blocks for AI analysis."""
     if not stats:
         return ""
 
     lines = []
-    lines.append("*Дриблинг и единоборства (SofaScore):*")
 
-    # Dribbling
+    # === Positions ===
+    positions = stats.get("_positions_detailed", [])
+    if positions:
+        pos_names = [POSITION_NAMES.get(p, p) for p in positions]
+        lines.append(f"*Позиции в этом сезоне (SofaScore):* {', '.join(pos_names)}")
+        lines.append(f"  Коды позиций: {', '.join(positions)}")
+        if len(positions) > 1:
+            lines.append(f"  Основная: {pos_names[0]} | Также играл: {', '.join(pos_names[1:])}")
+        lines.append("")
+
+    # === Defensive stats ===
+    has_def = False
+    def_lines = ["*Оборонительные действия (SofaScore):*"]
+
+    tackles = stats.get("tackles")
+    tackles_won = stats.get("tacklesWon")
+    tackles_pct = stats.get("tacklesWonPercentage")
+    if tackles is not None:
+        s = f"  Отборы: {tackles} (выиграно {tackles_won}"
+        if tackles_pct is not None:
+            s += f", {tackles_pct:.1f}%"
+        s += ")"
+        def_lines.append(s)
+        has_def = True
+
+    interceptions = stats.get("interceptions")
+    if interceptions is not None:
+        def_lines.append(f"  Перехваты: {interceptions}")
+        has_def = True
+
+    clearances = stats.get("clearances")
+    if clearances is not None:
+        def_lines.append(f"  Выносы: {clearances}")
+        has_def = True
+
+    blocks = stats.get("outfielderBlocks")
+    blocked_shots = stats.get("blockedShots")
+    if blocks is not None or blocked_shots is not None:
+        def_lines.append(f"  Блоки: {blocks or 0} | Заблокированные удары: {blocked_shots or 0}")
+        has_def = True
+
+    recovery = stats.get("ballRecovery")
+    if recovery is not None:
+        def_lines.append(f"  Возвраты мяча: {recovery}")
+        has_def = True
+
+    fouls = stats.get("fouls")
+    was_fouled = stats.get("wasFouled")
+    if fouls is not None:
+        def_lines.append(f"  Фолы совершены: {fouls} | Заработаны: {was_fouled or 0}")
+        has_def = True
+
+    if has_def:
+        lines.extend(def_lines)
+        lines.append("")
+
+    # === Dribbling ===
+    drib_lines = ["*Дриблинг (SofaScore):*"]
+    has_drib = False
+
     succ = stats.get("successfulDribbles")
     total = stats.get("totalContest")
     pct = stats.get("successfulDribblesPercentage")
     if succ is not None and total is not None:
-        lines.append(f"  Обводки: {succ}/{total} успешных ({pct:.1f}%)" if pct else f"  Обводки: {succ}/{total}")
+        s = f"  Обводки: {succ}/{total} успешных"
+        if pct is not None:
+            s += f" ({pct:.1f}%)"
+        drib_lines.append(s)
+        has_drib = True
 
     disp = stats.get("dispossessed")
     if disp is not None:
-        lines.append(f"  Потери мяча при обводке: {disp}")
-
-    # Possession
-    poss_won = stats.get("possessionWonAttThird")
-    if poss_won is not None:
-        lines.append(f"  Отборы в атакующей трети: {poss_won}")
+        drib_lines.append(f"  Потери при обводке: {disp}")
+        has_drib = True
 
     poss_lost = stats.get("possessionLost")
     if poss_lost is not None:
-        lines.append(f"  Всего потерь владения: {poss_lost}")
+        drib_lines.append(f"  Всего потерь владения: {poss_lost}")
+        has_drib = True
 
-    # Duels
+    if has_drib:
+        lines.extend(drib_lines)
+        lines.append("")
+
+    # === Duels ===
+    duel_lines = ["*Единоборства (SofaScore):*"]
+    has_duel = False
+
+    total_duels = stats.get("totalDuelsWon")
+    total_duels_pct = stats.get("totalDuelsWonPercentage")
+    if total_duels is not None:
+        s = f"  Всего выиграно: {total_duels}"
+        if total_duels_pct is not None:
+            s += f" ({total_duels_pct:.1f}%)"
+        duel_lines.append(s)
+        has_duel = True
+
     ground_won = stats.get("groundDuelsWon")
     ground_pct = stats.get("groundDuelsWonPercentage")
     if ground_won is not None:
-        lines.append(f"  Наземные единоборства: {ground_won} выиграно ({ground_pct:.1f}%)" if ground_pct else f"  Наземные единоборства: {ground_won}")
+        s = f"  Наземные: {ground_won} выиграно"
+        if ground_pct is not None:
+            s += f" ({ground_pct:.1f}%)"
+        duel_lines.append(s)
+        has_duel = True
 
     aerial_won = stats.get("aerialDuelsWon")
     aerial_pct = stats.get("aerialDuelsWonPercentage")
     if aerial_won is not None:
-        lines.append(f"  Воздушные единоборства: {aerial_won} выиграно ({aerial_pct:.1f}%)" if aerial_pct else f"  Воздушные: {aerial_won}")
+        s = f"  Воздушные: {aerial_won} выиграно"
+        if aerial_pct is not None:
+            s += f" ({aerial_pct:.1f}%)"
+        duel_lines.append(s)
+        has_duel = True
 
-    # Big chances
+    if has_duel:
+        lines.extend(duel_lines)
+        lines.append("")
+
+    # === Attacking extras ===
+    att_lines = ["*Атакующие детали (SofaScore):*"]
+    has_att = False
+
+    poss_won = stats.get("possessionWonAttThird")
+    if poss_won is not None:
+        att_lines.append(f"  Отборы в атакующей трети: {poss_won}")
+        has_att = True
+
     bc_created = stats.get("bigChancesCreated")
     bc_missed = stats.get("bigChancesMissed")
     if bc_created is not None or bc_missed is not None:
@@ -175,26 +289,29 @@ def format_sofascore_extra(stats: Dict) -> str:
             parts.append(f"создано {bc_created}")
         if bc_missed is not None:
             parts.append(f"упущено {bc_missed}")
-        lines.append(f"  Голевые моменты: {', '.join(parts)}")
+        att_lines.append(f"  Голевые моменты: {', '.join(parts)}")
+        has_att = True
 
-    # Touches breakdown
     touches = stats.get("touches")
-    att_third = stats.get("shotsFromInsideTheBox")
     if touches:
-        lines.append(f"  Касания: {touches}")
+        att_lines.append(f"  Касания: {touches}")
+        has_att = True
 
-    # Shots breakdown
     shots_in = stats.get("shotsFromInsideTheBox")
     shots_out = stats.get("shotsFromOutsideTheBox")
     if shots_in is not None or shots_out is not None:
-        lines.append(f"  Удары из штрафной: {shots_in or 0} | Из-за штрафной: {shots_out or 0}")
+        att_lines.append(f"  Удары из штрафной: {shots_in or 0} | Из-за штрафной: {shots_out or 0}")
+        has_att = True
 
-    # Goals breakdown
     goals_in = stats.get("goalsFromInsideTheBox")
     goals_out = stats.get("goalsFromOutsideTheBox")
     if goals_in is not None:
-        lines.append(f"  Голы из штрафной: {goals_in} | Издалека: {goals_out or 0}")
+        att_lines.append(f"  Голы из штрафной: {goals_in} | Издалека: {goals_out or 0}")
+        has_att = True
 
-    if len(lines) <= 1:
+    if has_att:
+        lines.extend(att_lines)
+
+    if not lines:
         return ""
     return "\n".join(lines)
