@@ -1,25 +1,34 @@
 from typing import Dict, List, Optional
 
 
-def _fmt(value) -> str:
+def _fmt(value, decimals: int = 2) -> str:
     if value is None:
         return "—"
-    if isinstance(value, float):
-        return f"{value:.2f}" if not value.is_integer() else str(int(value))
-    return str(value)
+    try:
+        f = float(value)
+        if f == int(f):
+            return str(int(f))
+        return f"{f:.{decimals}f}"
+    except (ValueError, TypeError):
+        return str(value)
 
 
-def _per90(total: float, minutes: Optional[float]) -> Optional[float]:
-    if minutes is None or minutes <= 0:
+def _per90(total, minutes) -> Optional[float]:
+    try:
+        t = float(total)
+        m = float(minutes)
+    except (ValueError, TypeError):
         return None
-    return total * 90.0 / minutes
+    if m <= 0:
+        return None
+    return t * 90.0 / m
 
 
-def format_player(player: Dict) -> str:
-    """Format FotMob player data into readable text."""
-    name = player.get("name", "Unknown")
-    position = _get_position(player)
-    team = _get_team(player)
+def format_player_stats(name: str, team: str, league: str, position: str, stats: Dict) -> str:
+    """Format Understat season stats into readable text."""
+    minutes = stats.get("time", 0)
+    games = stats.get("games", 0)
+    season = stats.get("season", "?")
 
     lines: List[str] = []
 
@@ -29,113 +38,73 @@ def format_player(player: Dict) -> str:
     if position:
         header += f" — {position}"
     lines.append(header)
-
-    # Player info
-    info = player.get("playerInformation", [])
-    info_parts = []
-    for item in info:
-        title = item.get("title", "")
-        val = item.get("value", {})
-        label = val.get("fallback") or val.get("value", "")
-        if title and label:
-            info_parts.append(f"{title}: {label}")
-    if info_parts:
-        lines.append(" | ".join(info_parts[:4]))
+    lines.append(f"Сезон {season}/{int(season)+1} | {league}")
+    lines.append(f"Матчей: {games} | Минут: {minutes}")
     lines.append("")
 
-    # Season stats (firstSeasonStats)
-    fss = player.get("firstSeasonStats", {})
-    lines.append(_format_season_stats(fss, player))
-
-    # Tournament breakdown from statSeasons
-    seasons = player.get("statSeasons", [])
-    if seasons:
-        current = seasons[0]
-        season_name = current.get("seasonName", "")
-        tournaments = current.get("tournaments", [])
-        if tournaments:
-            lines.append(f"\n*Сезон {season_name}* — турниры:")
-            for t in tournaments:
-                lines.append(f"  • {t.get('name', '?')}")
-
-    return "\n".join(lines)
-
-
-def _get_position(player: Dict) -> Optional[str]:
-    pd = player.get("positionDescription", {})
-    if isinstance(pd, str):
-        return pd
-    if isinstance(pd, dict):
-        primary = pd.get("primaryPosition")
-        if isinstance(primary, dict):
-            return primary.get("label")
-        return pd.get("label")
-    return None
-
-
-def _get_team(player: Dict) -> Optional[str]:
-    pt = player.get("primaryTeam", {})
-    return pt.get("teamName")
-
-
-def _format_season_stats(fss: Dict, player: Dict) -> str:
-    if not fss:
-        return "_Нет расширенной статистики_"
-
-    lines: List[str] = []
-
-    # Top stat card
-    top_card = fss.get("topStatCard", {})
-    if top_card:
-        items = top_card.get("items", [])
-        card_parts = []
-        for item in items:
-            title = item.get("title", "")
-            per90 = item.get("per90")
-            total = item.get("statValue")
-            if title:
-                s = f"{title}: {_fmt(total)}"
-                if per90 is not None:
-                    s += f" ({_fmt(per90)}/90)"
-                card_parts.append(s)
-        if card_parts:
-            lines.append("*Ключевые показатели:*")
-            for p in card_parts:
-                lines.append(f"  {p}")
-            lines.append("")
-
-    # Stats sections
-    stats_section = fss.get("statsSection")
-    if stats_section and isinstance(stats_section, dict):
-        _format_stats_section(stats_section, lines)
-    elif isinstance(stats_section, list):
-        for section in stats_section:
-            _format_stats_section(section, lines)
-
-    if not lines:
-        return "_Нет расширенной статистики_"
-    return "\n".join(lines)
-
-
-def _format_stats_section(section: Dict, lines: List[str]) -> None:
-    title = section.get("title", "")
-    items = section.get("items", [])
-    if not items:
-        return
-
-    if title:
-        lines.append(f"*{title}:*")
-
-    for item in items:
-        label = item.get("title", "")
-        total = item.get("statValue")
-        per90 = item.get("per90")
-        percentile = item.get("percentileRank")
-
-        s = f"  {label}: {_fmt(total)}"
-        if per90 is not None:
-            s += f" ({_fmt(per90)}/90)"
-        if percentile is not None:
-            s += f" [top {100 - int(percentile)}%]"
-        lines.append(s)
+    # Goals & assists
+    goals = stats.get("goals", 0)
+    assists = stats.get("assists", 0)
+    npg = stats.get("npg", 0)
+    lines.append(f"*Голы и ассисты:*")
+    lines.append(f"  Голы: {goals} (без пенальти: {npg})")
+    lines.append(f"  Ассисты: {assists}")
+    g90 = _per90(goals, minutes)
+    a90 = _per90(assists, minutes)
+    if g90 is not None:
+        lines.append(f"  Голы/90: {_fmt(g90)} | Ассисты/90: {_fmt(a90)}")
     lines.append("")
+
+    # xG metrics
+    xg = stats.get("xG")
+    xa = stats.get("xA")
+    npxg = stats.get("npxG")
+    xg_chain = stats.get("xGChain")
+    xg_buildup = stats.get("xGBuildup")
+
+    lines.append("*Expected метрики:*")
+    lines.append(f"  xG: {_fmt(xg)} | xA: {_fmt(xa)}")
+    lines.append(f"  npxG: {_fmt(npxg)}")
+    xg90 = _per90(xg, minutes)
+    xa90 = _per90(xa, minutes)
+    if xg90 is not None:
+        lines.append(f"  xG/90: {_fmt(xg90)} | xA/90: {_fmt(xa90)}")
+
+    # Over/underperformance
+    try:
+        g_minus_xg = int(goals) - float(xg)
+        a_minus_xa = int(assists) - float(xa)
+        lines.append(f"  Голы−xG: {_fmt(g_minus_xg)} | Ассисты−xA: {_fmt(a_minus_xa)}")
+    except (ValueError, TypeError):
+        pass
+
+    if xg_chain:
+        lines.append(f"  xGChain: {_fmt(xg_chain)} | xGBuildup: {_fmt(xg_buildup)}")
+    lines.append("")
+
+    # Shots & key passes
+    shots = stats.get("shots", 0)
+    key_passes = stats.get("key_passes", 0)
+    lines.append("*Удары и пасы:*")
+    lines.append(f"  Удары: {shots} | Ключевые пасы: {key_passes}")
+    s90 = _per90(shots, minutes)
+    kp90 = _per90(key_passes, minutes)
+    if s90 is not None:
+        lines.append(f"  Удары/90: {_fmt(s90)} | Ключевые пасы/90: {_fmt(kp90)}")
+
+    # xG per shot
+    try:
+        if int(shots) > 0:
+            xg_per_shot = float(xg) / int(shots)
+            lines.append(f"  xG/удар: {_fmt(xg_per_shot, 3)}")
+    except (ValueError, TypeError, ZeroDivisionError):
+        pass
+    lines.append("")
+
+    # Cards
+    yellow = stats.get("yellow_cards", 0)
+    red = stats.get("red_cards", 0)
+    if int(yellow) > 0 or int(red) > 0:
+        lines.append(f"*Дисциплина:* ЖК: {yellow} | КК: {red}")
+
+    return "\n".join(lines)

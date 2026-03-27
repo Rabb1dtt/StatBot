@@ -1,12 +1,10 @@
 import asyncio
-import re
 import unicodedata
 from dataclasses import dataclass
 from typing import Optional, List, Dict
 
 import cyrtranslit
-from rapidfuzz import fuzz
-from cachetools import TTLCache
+from rapidfuzz import fuzz, process
 
 try:
     from openai import OpenAI
@@ -14,19 +12,16 @@ except Exception:
     OpenAI = None  # type: ignore
 
 import config
-from fotmob_client import FotmobClient
+from database import PlayerDB
 
 
 @dataclass
 class ResolvedPlayer:
-    player_id: int
+    understat_id: int
     name: str
-    team: Optional[str]
-    score: float
-
-
-def _normalize(text: str) -> str:
-    return text.lower().strip()
+    team: str
+    league: str
+    position: str
 
 
 def _strip_accents(text: str) -> str:
@@ -35,34 +30,20 @@ def _strip_accents(text: str) -> str:
     )
 
 
-def _expand_queries(query: str) -> List[str]:
-    q = query.strip()
-    variants: List[str] = []
+def _normalize(text: str) -> str:
+    return _strip_accents(text).lower().strip()
 
-    def add(v: str) -> None:
-        v = v.strip()
-        if v and v not in variants:
-            variants.append(v)
 
-    add(q)
-    add(q.replace("-", " "))
-    add(q.replace(" ", "-"))
-
-    translit = cyrtranslit.to_latin(q, "ru")
-    add(translit)
-    add(translit.replace("-", " "))
-    add(_strip_accents(translit))
-
-    parts = re.split(r"\s+", q)
-    if len(parts) > 1:
-        add(parts[-1])
-
-    return variants[:8]
+def _transliterate(text: str) -> str:
+    """Cyrillic to Latin."""
+    return cyrtranslit.to_latin(text, "ru")
 
 
 class NameResolver:
-    def __init__(self, client: FotmobClient) -> None:
-        self.client = client
+    def __init__(self, db: PlayerDB) -> None:
+        self.db = db
+        self._players: List[Dict] = []
+        self._search_index: Dict[str, Dict] = {}  # name_search -> player dict
         if OpenAI and config.OPENROUTER_API_KEY:
             self._llm = OpenAI(
                 base_url="https://openrouter.ai/api/v1",
@@ -71,63 +52,83 @@ class NameResolver:
         else:
             self._llm = None
         self.model = config.OPENROUTER_MODEL
-        self._cache: TTLCache = TTLCache(maxsize=4096, ttl=60 * 60 * 24)
+
+    def rebuild_index(self) -> None:
+        """Reload players from DB into memory for fast search."""
+        self._players = self.db.get_all_players_for_search()
+        self._search_index = {}
+        for p in self._players:
+            key = p["name_search"]
+            # Keep the one with more data (higher understat_id usually = more recent)
+            if key not in self._search_index:
+                self._search_index[key] = p
+
+    def _fuzzy_search(self, query: str, limit: int = 5) -> List[Dict]:
+        """Local fuzzy search across all players."""
+        if not self._search_index:
+            return []
+
+        # Try multiple query variants
+        variants = set()
+        variants.add(_normalize(query))
+        variants.add(_normalize(_transliterate(query)))
+        # Surname only
+        parts = query.strip().split()
+        if len(parts) > 1:
+            variants.add(_normalize(parts[-1]))
+            variants.add(_normalize(_transliterate(parts[-1])))
+
+        choices = list(self._search_index.keys())
+        best_results: Dict[int, tuple] = {}  # understat_id -> (score, player)
+
+        for variant in variants:
+            matches = process.extract(
+                variant, choices, scorer=fuzz.WRatio, limit=limit
+            )
+            for name_key, score, _ in matches:
+                player = self._search_index[name_key]
+                uid = player["understat_id"]
+                if uid not in best_results or score > best_results[uid][0]:
+                    best_results[uid] = (score, player)
+
+        # Sort by score descending
+        sorted_results = sorted(best_results.values(), key=lambda x: x[0], reverse=True)
+        return [p for _, p in sorted_results[:limit]]
 
     async def resolve(self, query: str) -> Optional[ResolvedPlayer]:
-        cached = self._cache.get(query.lower())
-        if cached:
-            return cached
+        """Resolve a player name query to a ResolvedPlayer."""
+        results = self._fuzzy_search(query)
+        if results:
+            best = results[0]
+            return ResolvedPlayer(
+                understat_id=best["understat_id"],
+                name=best["name"],
+                team=best.get("team", ""),
+                league=best.get("league", ""),
+                position=best.get("position", ""),
+            )
 
-        candidates: List[Dict] = []
-        queries = _expand_queries(query)
-
-        for q in queries:
-            players = await self.client.search_players(q)
-            candidates.extend(players)
-
-        # LLM fallback if nothing found
-        if not candidates and self._llm:
+        # LLM fallback: transliterate/guess the name
+        if self._llm:
             guess = await self._guess_latin_name(query)
             if guess:
-                players = await self.client.search_players(guess)
-                candidates.extend(players)
+                results = self._fuzzy_search(guess)
+                if results:
+                    best = results[0]
+                    return ResolvedPlayer(
+                        understat_id=best["understat_id"],
+                        name=best["name"],
+                        team=best.get("team", ""),
+                        league=best.get("league", ""),
+                        position=best.get("position", ""),
+                    )
 
-        if not candidates:
-            return None
-
-        best = self._choose_best(query, candidates)
-        if best is None:
-            return None
-
-        resolved = ResolvedPlayer(
-            player_id=int(best["id"]),
-            name=best["name"],
-            team=best.get("teamName"),
-            score=best["_score"],
-        )
-        self._cache[query.lower()] = resolved
-        return resolved
-
-    def _choose_best(self, query: str, candidates: List[Dict]) -> Optional[Dict]:
-        normalized = _normalize(cyrtranslit.to_latin(query, "ru"))
-        best = None
-        best_score = -1.0
-        for c in candidates:
-            name = c.get("name", "")
-            score = fuzz.WRatio(normalized, _normalize(name))
-            combined = score * 0.7 + (c.get("score", 0) / 400_000) * 30
-            if combined > best_score:
-                best_score = combined
-                best = c
-        if best:
-            best["_score"] = best_score
-        return best
+        return None
 
     async def parse_query(self, query: str) -> dict:
         """
-        Parse user query to determine intent.
-        Returns: {"type": "single", "names": ["Salah"]}
-             or: {"type": "compare", "names": ["Salah", "Mbappe"]}
+        Determine if user wants single player or comparison.
+        Returns: {"type": "single"|"compare", "names": [...]}
         """
         if not self._llm:
             return {"type": "single", "names": [query]}
@@ -143,8 +144,8 @@ class NameResolver:
             "PLAYER1: <name as written by user>\n\n"
             "or for comparison:\n"
             "TYPE: compare\n"
-            "PLAYER1: <first player name as written>\n"
-            "PLAYER2: <second player name as written>\n\n"
+            "PLAYER1: <first player name>\n"
+            "PLAYER2: <second player name>\n\n"
             f"Query: {query}"
         )
         try:
@@ -156,7 +157,6 @@ class NameResolver:
                 return resp.choices[0].message.content.strip()
 
             text = await asyncio.to_thread(_call)
-            result: dict = {"type": "single", "names": [query]}
             qtype = "single"
             names = []
             for line in text.splitlines():
@@ -171,8 +171,8 @@ class NameResolver:
                     names.append(line.split(":", 1)[1].strip())
 
             if names:
-                result = {"type": qtype, "names": names}
-            return result
+                return {"type": qtype, "names": names}
+            return {"type": "single", "names": [query]}
         except Exception:
             return {"type": "single", "names": [query]}
 

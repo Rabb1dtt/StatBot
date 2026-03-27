@@ -9,9 +9,11 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message
 
 import config
-from fotmob_client import FotmobClient
+from database import PlayerDB
+from understat_sync import sync_player_ids_async
+from understat_client import UnderstatPlayerClient
 from name_resolver import NameResolver
-from stats_formatter import format_player
+from stats_formatter import format_player_stats
 from ai_analyzer import AIAnalyzer
 
 
@@ -69,7 +71,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-async def create_bot() -> tuple[Bot, Dispatcher, FotmobClient, NameResolver]:
+async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
     if not config.BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN is missing. Add it to .env")
 
@@ -82,27 +84,49 @@ async def create_bot() -> tuple[Bot, Dispatcher, FotmobClient, NameResolver]:
     me = await bot.get_me()
     bot_username = (me.username or "").lower()
 
-    fc = FotmobClient()
-    await fc.start()
-    resolver = NameResolver(fc)
+    # Database
+    db = PlayerDB()
+    db.open()
+
+    # Sync player IDs if DB is empty
+    if db.is_empty():
+        logger.info("DB is empty, syncing player IDs from Understat...")
+        count = await sync_player_ids_async(db)
+        logger.info("Loaded %d players into DB", count)
+
+    # Components
+    usc = UnderstatPlayerClient()
+    resolver = NameResolver(db)
+    resolver.rebuild_index()
     analyzer = AIAnalyzer()
 
     @dp.message(CommandStart())
     async def on_start(message: Message) -> None:
+        count = db.player_count()
         await message.answer(
-            "Привет! Отправь имя футболиста — пришлю статистику за текущий сезон.\n"
-            "Можно сравнить двух игроков: «Салах vs Мбаппе» или «сравни Холанда и Палмера»"
+            f"Привет! В базе {count} игроков из 6 топ-лиг.\n"
+            "Отправь имя — пришлю статистику за текущий сезон.\n"
+            "Сравнить: «Салах vs Мбаппе» или «сравни Холанда и Палмера»"
         )
 
-    async def _fetch_player(name: str) -> tuple[str | None, str | None]:
-        """Resolve + fetch + format a single player. Returns (formatted_text, error)."""
+    async def _fetch_stats(name: str) -> tuple[str | None, str | None]:
+        """Resolve + fetch stats. Returns (formatted_text, error)."""
         resolved = await resolver.resolve(name)
         if not resolved:
-            return None, f"Не нашёл игрока «{name}»."
-        player_data = await fc.get_player(resolved.player_id, resolved.name)
-        if not player_data:
-            return None, f"Статистика «{resolved.name}» не найдена."
-        return format_player(player_data), None
+            return None, f"Не нашёл игрока «{name}». Доступны 6 лиг: EPL, La Liga, Serie A, Bundesliga, Ligue 1, РПЛ."
+
+        season = await usc.get_current_season(resolved.understat_id)
+        if not season:
+            return None, f"Нет статистики за текущий сезон для {resolved.name}."
+
+        text = format_player_stats(
+            name=resolved.name,
+            team=resolved.team,
+            league=resolved.league,
+            position=resolved.position,
+            stats=season,
+        )
+        return text, None
 
     @dp.message(F.text)
     async def handle_query(message: Message) -> None:
@@ -131,7 +155,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, FotmobClient, NameResolver]:
 
     async def _handle_single(message: Message, name: str) -> None:
         try:
-            raw_text, err = await _fetch_player(name)
+            raw_text, err = await _fetch_stats(name)
         except Exception as e:
             logger.exception("fetch failed")
             await message.answer(f"Ошибка: {type(e).__name__}: {e}")
@@ -150,8 +174,8 @@ async def create_bot() -> tuple[Bot, Dispatcher, FotmobClient, NameResolver]:
         await message.answer(f"Ищу {name1} и {name2}...")
 
         try:
-            text1, err1 = await _fetch_player(name1)
-            text2, err2 = await _fetch_player(name2)
+            text1, err1 = await _fetch_stats(name1)
+            text2, err2 = await _fetch_stats(name2)
         except Exception as e:
             logger.exception("compare fetch failed")
             await message.answer(f"Ошибка: {type(e).__name__}: {e}")
@@ -169,20 +193,19 @@ async def create_bot() -> tuple[Bot, Dispatcher, FotmobClient, NameResolver]:
             for chunk in split_message(final_text):
                 await message.answer(chunk, parse_mode=None)
         else:
-            # Fallback: just show both raw stats
             combined = f"=== ИГРОК 1 ===\n{text1}\n\n=== ИГРОК 2 ===\n{text2}"
             for chunk in split_message(combined):
                 await message.answer(chunk)
 
-    return bot, dp, fc, resolver
+    return bot, dp, db
 
 
 async def main() -> None:
-    bot, dp, fc, _resolver = await create_bot()
+    bot, dp, db = await create_bot()
     try:
         await dp.start_polling(bot)
     finally:
-        await fc.close()
+        db.close()
 
 
 if __name__ == "__main__":
