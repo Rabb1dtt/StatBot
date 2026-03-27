@@ -2,6 +2,7 @@ import asyncio
 import html
 import logging
 import re
+from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
@@ -17,7 +18,7 @@ from name_resolver import NameResolver
 from cachetools import TTLCache
 from stats_formatter import format_player_stats, format_match_breakdown
 from sofascore_client import SofascoreClient, format_sofascore_extra, format_cup_matches, CUP_TOURNAMENT_IDS, LEAGUE_TOURNAMENT_IDS
-from team_client import TeamDataClient, format_team_data
+from team_client import TeamDataClient, format_team_data, UNDERSTAT_LEAGUES
 from ai_analyzer import AIAnalyzer
 
 
@@ -331,7 +332,6 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                             manager = team_info.get("team", {}).get("manager")
 
                         # Stats
-                        from team_client import UNDERSTAT_LEAGUES
                         us_league = UNDERSTAT_LEAGUES.get(league, league)
                         ut_id = LEAGUE_TOURNAMENT_IDS.get(us_league)
                         if ut_id:
@@ -361,7 +361,6 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                 league_tid = LEAGUE_TOURNAMENT_IDS.get(
                     UNDERSTAT_LEAGUES.get(league, league) if league else ""
                 )
-                from datetime import datetime, timezone
                 for e in team_events:
                     tid = e.get("tournament", {}).get("uniqueTournament", {}).get("id")
                     # Skip league matches (already in Understat data)
