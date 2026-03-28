@@ -366,8 +366,8 @@ class NameResolver:
             "- 'Реал Мадрид сезон' → TYPE: team, TEAM: Real Madrid, LEAGUE: LaLiga\n"
             "- 'сравни тренеров Ливерпуля и Арсенала' → TYPE: compare_coaches, COACH_NAME: Arne Slot, COACH_NAME2: Mikel Arteta\n"
             "- 'Гвардиола vs Артета' → TYPE: compare_coaches, COACH_NAME: Pep Guardiola, COACH_NAME2: Mikel Arteta\n"
-            "- 'Почеттино vs Мареска в Челси' → TYPE: compare_coaches, COACH_NAME: Mauricio Pochettino, COACH_NAME2: Enzo Maresca\n"
-            "- 'Де Дзерби vs Аморим' → TYPE: compare_coaches, COACH_NAME: Roberto De Zerbi, COACH_NAME2: Ruben Amorim\n\n"
+            "- 'Почеттино vs Мареска в Челси' → TYPE: compare_coaches, COACH_NAME: Mauricio Pochettino, TEAM: Chelsea, LEAGUE: Premier League, COACH_NAME2: Enzo Maresca, TEAM2: Chelsea, LEAGUE2: Premier League\n"
+            "- 'Де Дзерби vs Аморим' → TYPE: compare_coaches, COACH_NAME: Roberto De Zerbi, TEAM: Marseille, LEAGUE: Ligue 1, COACH_NAME2: Ruben Amorim, TEAM2: Manchester United, LEAGUE2: Premier League\n\n"
 
             "Reply STRICTLY in this format (one field per line, no extra text):\n"
             "TYPE: single|compare|match|coach|team|compare_coaches\n"
@@ -487,29 +487,28 @@ class NameResolver:
             # Compare coaches
             if qtype == "compare_coaches":
                 cn = []
+                ct = []  # coach teams
+                cl = []  # coach leagues
                 if "coach_name" in locals() and coach_name:
                     cn.append(coach_name)
+                    ct.append(team_name or "")
+                    cl.append(league_name or "")
                 if "coach_names" in locals():
                     cn.extend(coach_names)
-                if len(cn) < 2:
-                    # Fallback: use team names
-                    team_list = [team_name] if team_name else []
-                    team_list += teams if "teams" in locals() else []
-                    return {
-                        "type": "compare_coaches",
-                        "names": team_list,
-                        "team_hints": [None] * len(team_list),
-                        "coach_names": cn,
-                        "teams": team_list,
-                        "leagues": [league_name] + (leagues if "leagues" in locals() else []),
-                    }
+                # Build teams list: TEAM2 maps to second coach, etc.
+                extra_teams = teams if "teams" in locals() else []
+                extra_leagues = leagues if "leagues" in locals() else []
+                for i in range(len(cn) - len(ct)):
+                    ct.append(extra_teams[i] if i < len(extra_teams) else "")
+                    cl.append(extra_leagues[i] if i < len(extra_leagues) else "")
+
                 return {
                     "type": "compare_coaches",
                     "names": cn,
                     "team_hints": [None] * len(cn),
                     "coach_names": cn,
-                    "teams": [],  # will be resolved via search
-                    "leagues": [],
+                    "teams": ct,
+                    "leagues": cl,
                 }
 
             # Coach/team queries

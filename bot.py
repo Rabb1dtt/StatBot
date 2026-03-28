@@ -248,16 +248,24 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             coach_names_list = parsed.get("coach_names", [])
             teams_list = parsed.get("teams", [])
 
-            # For each coach, search for their team and dates
+            # For each coach, search for dates (team already from Sonnet)
+            leagues_list = parsed.get("leagues", [])
             resolved_coaches = []
             for i, cn in enumerate(coach_names_list):
-                # Try to find which team this coach managed
-                team_for_search = teams_list[i] if i < len(teams_list) else ""
-                info = await resolver.search_specific_coach(cn, team_for_search or cn)
-                # Also search which team they're at
-                team_info = await resolver.search_coach_info(cn)
-                team = team_for_search or (team_info.get("team") if team_info else "") or cn
-                league = (team_info.get("league") if team_info else "") or (parsed.get("leagues", [None])[0] if parsed.get("leagues") else None)
+                team = teams_list[i] if i < len(teams_list) else ""
+                league = leagues_list[i] if i < len(leagues_list) else ""
+
+                # Search for dates at this specific team
+                info = await resolver.search_specific_coach(cn, team or cn)
+
+                # If no team from Sonnet, try search_coach_info
+                if not team and info is None:
+                    team_info = await resolver.search_coach_info(cn)
+                    if team_info:
+                        team = team_info.get("team", "")
+                        league = team_info.get("league", "")
+                        info = {"coach_since": team_info.get("coach_since")}
+
                 resolved_coaches.append({
                     "coach_name": cn,
                     "team": team,
