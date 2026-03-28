@@ -54,6 +54,7 @@ class NameResolver:
             self._llm = None
         self.model_translate = config.MODEL_TRANSLATE
         self.model_orchestrator = config.MODEL_ORCHESTRATOR
+        self.model_search = config.MODEL_SEARCH
 
     def rebuild_index(self) -> None:
         """Reload players from DB into memory for fast search."""
@@ -566,21 +567,15 @@ class NameResolver:
         """Ask Sonnet when a coach left a club, given that a new manager is now in charge."""
         if not self._llm:
             return None
-        from datetime import date
-        today = date.today().isoformat()
         prompt = (
-            f"Today's date is {today}.\n"
-            f"The football club {team_name} currently has manager {current_manager} (this is confirmed live data).\n"
-            f"This means {coach_name} is NO LONGER the manager of {team_name}.\n"
-            f"When approximately did {coach_name} leave/get fired from {team_name}?\n"
-            f"Give your best estimate in YYYY-MM-DD format.\n"
-            f"If you can only estimate the month, use the 1st of that month (e.g. 2026-01-01).\n"
-            f"Reply with ONLY the date, nothing else."
+            f"When did {coach_name} leave or get fired from {team_name} football club? "
+            f"I know the current manager is {current_manager}. "
+            f"Reply with ONLY the date in YYYY-MM-DD format. Nothing else."
         )
         try:
             def _call():
                 resp = self._llm.chat.completions.create(
-                    model=self.model_orchestrator,
+                    model=self.model_search,
                     messages=[{"role": "user", "content": prompt}],
                 )
                 return resp.choices[0].message.content.strip()
