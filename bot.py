@@ -481,7 +481,13 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         sofa_league_results = []
         try:
             if sofa_team_id:
-                max_pages = 5 if not has_understat else 3
+                # More pages for all_time or non-understat leagues
+                if not has_understat:
+                    max_pages = 10
+                elif coach_since and coach_since < "2024-01-01":
+                    max_pages = 15  # multi-season tenure
+                else:
+                    max_pages = 3
                 team_events = await sofa.get_team_events(sofa_team_id, max_pages=max_pages)
                 league_tid = LEAGUE_TOURNAMENT_IDS.get(us_league) if us_league else None
                 for e in team_events:
