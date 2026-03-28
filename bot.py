@@ -290,17 +290,24 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             coach_name = parsed.get("coach_name")
 
             if coach_name:
-                search_info = await resolver.search_specific_coach(coach_name, team_name)
-                if search_info:
-                    parsed["coach_since"] = search_info.get("coach_since") or parsed.get("coach_since")
-                    parsed["coach_until"] = search_info.get("coach_until") or parsed.get("coach_until")
-                # Also check which team
-                team_info = await resolver.search_coach_info(coach_name)
-                if team_info:
-                    if not parsed.get("team") or parsed["team"] == coach_name:
-                        parsed["team"] = team_info.get("team", team_name)
-                    if not parsed.get("league"):
-                        parsed["league"] = team_info.get("league")
+                # Only use search if Sonnet didn't already provide dates
+                # (Sonnet may have set specific season dates like 2021-08 to 2022-05)
+                sonnet_has_dates = parsed.get("coach_since") and parsed.get("coach_until")
+                if not sonnet_has_dates:
+                    search_info = await resolver.search_specific_coach(coach_name, team_name)
+                    if search_info:
+                        if not parsed.get("coach_since"):
+                            parsed["coach_since"] = search_info.get("coach_since")
+                        if not parsed.get("coach_until"):
+                            parsed["coach_until"] = search_info.get("coach_until")
+                # Check which team if not set
+                if not parsed.get("team") or not parsed.get("league"):
+                    team_info = await resolver.search_coach_info(coach_name)
+                    if team_info:
+                        if not parsed.get("team") or parsed["team"] == coach_name:
+                            parsed["team"] = team_info.get("team", team_name)
+                        if not parsed.get("league"):
+                            parsed["league"] = team_info.get("league")
             else:
                 search_info = await resolver.search_coach_info(team_name)
                 if search_info:
