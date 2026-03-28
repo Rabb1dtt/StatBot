@@ -290,8 +290,6 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             coach_name = parsed.get("coach_name")
 
             if coach_name:
-                # Only use search if Sonnet didn't already provide dates
-                # (Sonnet may have set specific season dates like 2021-08 to 2022-05)
                 sonnet_has_dates = parsed.get("coach_since") and parsed.get("coach_until")
                 if not sonnet_has_dates:
                     search_info = await resolver.search_specific_coach(coach_name, team_name)
@@ -300,6 +298,16 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                             parsed["coach_since"] = search_info.get("coach_since")
                         if not parsed.get("coach_until"):
                             parsed["coach_until"] = search_info.get("coach_until")
+
+                # If coach is CURRENT (no until) and no specific season requested →
+                # default to current season only (not entire tenure)
+                if not parsed.get("coach_until") and parsed.get("coach_since"):
+                    # Current season starts ~Aug 2025
+                    current_season_start = "2025-08-01"
+                    if parsed["coach_since"] < current_season_start:
+                        parsed["coach_since"] = current_season_start
+                        logger.info("Limiting to current season: since=%s", parsed["coach_since"])
+
                 # Check which team if not set
                 if not parsed.get("team") or not parsed.get("league"):
                     team_info = await resolver.search_coach_info(coach_name)
