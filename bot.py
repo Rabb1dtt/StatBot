@@ -568,12 +568,23 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             await message.answer("Нужно минимум 2 тренера для сравнения.")
             return
 
-        coach_labels = [f"{c['coach_name']} ({c['team']})" for c in coaches]
+        # Auto-fill coach_until: if two coaches at same club, earlier one's until = later one's since
+        coaches_sorted = sorted(coaches, key=lambda c: c.get("coach_since") or "9999")
+        for i in range(len(coaches_sorted) - 1):
+            if (coaches_sorted[i].get("team", "").lower() == coaches_sorted[i+1].get("team", "").lower()
+                    and not coaches_sorted[i].get("coach_until")
+                    and coaches_sorted[i+1].get("coach_since")):
+                coaches_sorted[i]["coach_until"] = coaches_sorted[i+1]["coach_since"]
+                logger.info("Auto-set %s coach_until=%s (next coach %s started)",
+                           coaches_sorted[i]["coach_name"], coaches_sorted[i]["coach_until"],
+                           coaches_sorted[i+1]["coach_name"])
+
+        coach_labels = [f"{c['coach_name']} ({c['team']})" for c in coaches_sorted]
         await message.answer(f"Собираю данные: {', '.join(coach_labels)}...")
 
-        # Run full single-coach analysis for each (same as _handle_team with mode=coach)
+        # Run full single-coach analysis for each
         raw_texts = []
-        for c in coaches:
+        for c in coaches_sorted:
             if not c.get("league"):
                 await message.answer(f"Не удалось определить лигу для {c['coach_name']}.")
                 return

@@ -641,11 +641,13 @@ class NameResolver:
         if not self._llm:
             return None
         prompt = (
-            f"When was {coach_name} appointed as head coach of {team_name}? "
-            f"When did they leave (if they left)? "
-            f"Reply in this EXACT format:\n"
-            f"COACH_SINCE: <YYYY-MM-DD>\n"
-            f"COACH_UNTIL: <YYYY-MM-DD or CURRENT>"
+            f"When was {coach_name} appointed as head coach of {team_name} football club? "
+            f"Are they STILL the head coach of {team_name}, or were they fired/left? "
+            f"If they left, when exactly?\n\n"
+            f"Reply in this EXACT format (dates as YYYY-MM-DD):\n"
+            f"COACH_SINCE: <appointment date>\n"
+            f"STILL_IN_CHARGE: YES or NO\n"
+            f"COACH_UNTIL: <departure date if they left, or CURRENT if still in charge>"
         )
         try:
             def _call():
@@ -658,6 +660,7 @@ class NameResolver:
             text = re.sub(r'\[\d+\]', '', text)
 
             result = {}
+            still_in_charge = None
             for line in text.splitlines():
                 line = line.strip().replace("*", "")
                 if "COACH_SINCE" in line.upper():
@@ -665,6 +668,8 @@ class NameResolver:
                     if m:
                         d = m.group(1)
                         result["coach_since"] = d if len(d) == 10 else d + "-01"
+                elif "STILL_IN_CHARGE" in line.upper():
+                    still_in_charge = "YES" in line.upper()
                 elif "COACH_UNTIL" in line.upper():
                     if "CURRENT" in line.upper():
                         result["coach_until"] = None
