@@ -299,10 +299,11 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                         if not parsed.get("coach_until"):
                             parsed["coach_until"] = search_info.get("coach_until")
 
-                # If coach is CURRENT (no until) and no specific season requested →
-                # default to current season only (not entire tenure)
-                if not parsed.get("coach_until") and parsed.get("coach_since"):
-                    # Current season starts ~Aug 2025
+                # If coach is CURRENT (no until), no specific season, and NOT all_time →
+                # default to current season only
+                if (not parsed.get("coach_until")
+                        and parsed.get("coach_since")
+                        and not parsed.get("all_time")):
                     current_season_start = "2025-08-01"
                     if parsed["coach_since"] < current_season_start:
                         parsed["coach_since"] = current_season_start

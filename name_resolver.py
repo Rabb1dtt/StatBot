@@ -322,12 +322,12 @@ class NameResolver:
             "2) compare — user wants to COMPARE 2-5 players. Example: 'сравни Салаха и Мбаппе', 'Холанд vs Ямал vs Палмер'\n"
             "3) match — user wants to see how a player performed in SPECIFIC MATCH(ES). "
             "Example: 'Орайли против Арсенала в финале кубка', 'Фоден последний матч', 'как Ямал сыграл против Реала в ЛЧ'\n"
-            "4) coach — user wants to evaluate a COACH's work this season. "
-            "Extract the coach's name, appointment date (COACH_SINCE), and departure date (COACH_UNTIL) if they were fired/left. "
-            "Use your knowledge - e.g. Arteta at Arsenal since Dec 2019, Slot at Liverpool since Jun 2024. "
-            "If the coach is STILL at the club, COACH_UNTIL = CURRENT. "
-            "If they were fired/left, give the date. If unsure, use UNKNOWN.\n"
-            "Example: 'тренер Ливерпуля', 'оценка Гвардиолы', 'как работает Анчелотти', 'coach Arteta'\n"
+            "4) coach — user wants to evaluate a COACH's work. "
+            "Extract coach name, dates, and whether user wants FULL TENURE or just current season.\n"
+            "- If user says 'за весь период' / 'за всё время' / 'full tenure' → ALL_TIME: yes\n"
+            "- If user says 'сезон 2021-2022' → set COACH_SINCE and COACH_UNTIL to that season\n"
+            "- If user just says 'тренер Ливерпуля' / 'оцени Гвардиолу' → ALL_TIME: no (current season only)\n"
+            "Example: 'тренер Ливерпуля', 'оценка Гвардиолы', 'Гвардиола за весь период', 'Пеп сезон 2021-2022'\n"
             "5) team — user wants TEAM season analysis. "
             "Example: 'сезон Ливерпуля', 'как играет Арсенал', 'оценка Реала', 'команда Барселона'\n"
             "6) compare_coaches — user wants to COMPARE 2+ coaches. "
@@ -523,6 +523,7 @@ class NameResolver:
                     "coach_name": coach_name if "coach_name" in locals() else None,
                     "coach_since": coach_since if "coach_since" in locals() else None,
                     "coach_until": coach_until if "coach_until" in locals() else None,
+                    "all_time": all_time,
                 }
 
             if not names:
