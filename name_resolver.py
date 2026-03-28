@@ -54,6 +54,7 @@ class NameResolver:
             self._llm = None
         self.model_translate = config.MODEL_TRANSLATE
         self.model_orchestrator = config.MODEL_ORCHESTRATOR
+        self.model_search = config.MODEL_SEARCH
 
     def rebuild_index(self) -> None:
         """Reload players from DB into memory for fast search."""
@@ -593,12 +594,13 @@ class NameResolver:
         try:
             def _call():
                 resp = self._llm.chat.completions.create(
-                    model=self.model_orchestrator,
-                    tools=[{"type": "web_search"}],
+                    model=self.model_search,
                     messages=[{"role": "user", "content": prompt}],
                 )
                 return resp.choices[0].message.content.strip()
             text = await asyncio.to_thread(_call)
+            # Clean Perplexity citation refs [1], [2], etc.
+            text = re.sub(r'\[\d+\]', '', text)
 
             result = {}
             for line in text.splitlines():
@@ -606,8 +608,8 @@ class NameResolver:
                 if not line or ":" not in line:
                     continue
                 key, val = line.split(":", 1)
-                key = key.strip().upper()
-                val = val.strip()
+                key = key.strip().upper().replace("*", "")
+                val = val.strip().strip("*")
                 if val.upper() in ("NONE", "UNKNOWN", "N/A"):
                     continue
 
@@ -648,15 +650,16 @@ class NameResolver:
         try:
             def _call():
                 resp = self._llm.chat.completions.create(
-                    model=self.model_orchestrator,
-                    tools=[{"type": "web_search"}],
+                    model=self.model_search,
                     messages=[{"role": "user", "content": prompt}],
                 )
                 return resp.choices[0].message.content.strip()
             text = await asyncio.to_thread(_call)
+            text = re.sub(r'\[\d+\]', '', text)
 
             result = {}
             for line in text.splitlines():
+                line = line.strip().replace("*", "")
                 if "COACH_SINCE" in line.upper():
                     m = re.search(r'(\d{4}-\d{2}(?:-\d{2})?)', line)
                     if m:

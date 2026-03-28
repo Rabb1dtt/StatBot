@@ -10,3 +10,4 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 MODEL_ORCHESTRATOR = os.environ.get("MODEL_ORCHESTRATOR", "anthropic/claude-sonnet-4-6")  # query parsing
 MODEL_TRANSLATE = os.environ.get("MODEL_TRANSLATE", "google/gemini-3-flash-preview")  # name transliteration
 MODEL_ANALYSIS = os.environ.get("MODEL_ANALYSIS", "xiaomi/mimo-v2-pro")  # heavy analysis
+MODEL_SEARCH = os.environ.get("MODEL_SEARCH", "perplexity/sonar")  # web search (built-in)
