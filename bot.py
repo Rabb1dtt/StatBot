@@ -432,7 +432,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                                         f"/team/{sofa_team_id}/unique-tournament/{ut_id}/season/{season_id}/statistics/overall"
                                     )
                                     if data:
-                                    sofa_team_stats = data.get("statistics", {})
+                                        sofa_team_stats = data.get("statistics", {})
         except Exception:
             logger.exception("sofa team fetch failed")
 
