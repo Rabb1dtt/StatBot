@@ -330,8 +330,9 @@ class NameResolver:
             "Example: 'тренер Ливерпуля', 'оценка Гвардиолы', 'как работает Анчелотти', 'coach Arteta'\n"
             "5) team — user wants TEAM season analysis. "
             "Example: 'сезон Ливерпуля', 'как играет Арсенал', 'оценка Реала', 'команда Барселона'\n"
-            "6) compare_coaches — user wants to COMPARE 2+ coaches/teams. "
-            "Example: 'сравни тренеров Ливерпуля и Арсенала', 'Гвардиола vs Артета', 'Арсенал vs Ливерпуль сезон'\n\n"
+            "6) compare_coaches — user wants to COMPARE 2+ coaches. "
+            "IMPORTANT: extract COACH NAMES, not just teams. If user says 'Почеттино vs Мареска' these are TWO coaches, possibly at the SAME club in different periods.\n"
+            "Example: 'сравни тренеров Ливерпуля и Арсенала', 'Гвардиола vs Артета', 'Почеттино vs Мареска в Челси', 'Де Дзерби vs Аморим'\n\n"
 
             "RULES FOR PLAYER NAMES:\n"
             "- Extract the actual player name, removing qualifiers like 'последние 2 матча', 'в лиге' etc.\n"
@@ -364,9 +365,10 @@ class NameResolver:
             "- 'сезон Арсенала' → TYPE: team, TEAM: Arsenal, LEAGUE: Premier League\n"
             "- 'как играет Барселона' → TYPE: team, TEAM: Barcelona, LEAGUE: LaLiga\n"
             "- 'Реал Мадрид сезон' → TYPE: team, TEAM: Real Madrid, LEAGUE: LaLiga\n"
-            "- 'сравни тренеров Ливерпуля и Арсенала' → TYPE: compare_coaches, TEAM: Liverpool, LEAGUE: Premier League, TEAM2: Arsenal, LEAGUE2: Premier League\n"
-            "- 'Гвардиола vs Артета' → TYPE: compare_coaches, TEAM: Manchester City, LEAGUE: Premier League, TEAM2: Arsenal, LEAGUE2: Premier League\n"
-            "- 'Арсенал vs Ливерпуль сезон' → TYPE: compare_coaches, TEAM: Arsenal, LEAGUE: Premier League, TEAM2: Liverpool, LEAGUE2: Premier League\n\n"
+            "- 'сравни тренеров Ливерпуля и Арсенала' → TYPE: compare_coaches, COACH_NAME: Arne Slot, COACH_NAME2: Mikel Arteta\n"
+            "- 'Гвардиола vs Артета' → TYPE: compare_coaches, COACH_NAME: Pep Guardiola, COACH_NAME2: Mikel Arteta\n"
+            "- 'Почеттино vs Мареска в Челси' → TYPE: compare_coaches, COACH_NAME: Mauricio Pochettino, COACH_NAME2: Enzo Maresca\n"
+            "- 'Де Дзерби vs Аморим' → TYPE: compare_coaches, COACH_NAME: Roberto De Zerbi, COACH_NAME2: Ruben Amorim\n\n"
 
             "Reply STRICTLY in this format (one field per line, no extra text):\n"
             "TYPE: single|compare|match|coach|team|compare_coaches\n"
@@ -483,22 +485,32 @@ class NameResolver:
                             coach_sinces = []
                         coach_sinces.append(val)
 
-            # Compare coaches/teams
-            if qtype == "compare_coaches" and team_name:
-                team_list = [team_name] + (teams if "teams" in locals() else [])
-                league_list = [league_name] + (leagues if "leagues" in locals() else [])
-                cn = [coach_name] if "coach_name" in locals() else []
-                cn += coach_names if "coach_names" in locals() else []
-                cs = [coach_since] if "coach_since" in locals() else []
-                cs += coach_sinces if "coach_sinces" in locals() else []
+            # Compare coaches
+            if qtype == "compare_coaches":
+                cn = []
+                if "coach_name" in locals() and coach_name:
+                    cn.append(coach_name)
+                if "coach_names" in locals():
+                    cn.extend(coach_names)
+                if len(cn) < 2:
+                    # Fallback: use team names
+                    team_list = [team_name] if team_name else []
+                    team_list += teams if "teams" in locals() else []
+                    return {
+                        "type": "compare_coaches",
+                        "names": team_list,
+                        "team_hints": [None] * len(team_list),
+                        "coach_names": cn,
+                        "teams": team_list,
+                        "leagues": [league_name] + (leagues if "leagues" in locals() else []),
+                    }
                 return {
                     "type": "compare_coaches",
-                    "names": team_list,
-                    "team_hints": [None] * len(team_list),
-                    "teams": team_list,
-                    "leagues": league_list,
+                    "names": cn,
+                    "team_hints": [None] * len(cn),
                     "coach_names": cn,
-                    "coach_sinces": cs,
+                    "teams": [],  # will be resolved via search
+                    "leagues": [],
                 }
 
             # Coach/team queries

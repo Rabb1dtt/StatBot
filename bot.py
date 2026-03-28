@@ -243,20 +243,57 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         names = parsed["names"]
         hints = parsed.get("team_hints", [None] * len(names))
 
-        if qtype in ("coach", "compare_coaches"):
-            # Always use search model for fresh coach info
+        if qtype == "compare_coaches":
+            await message.answer("Ищу актуальную информацию о тренерах...")
+            coach_names_list = parsed.get("coach_names", [])
+            teams_list = parsed.get("teams", [])
+
+            # For each coach, search for their team and dates
+            resolved_coaches = []
+            for i, cn in enumerate(coach_names_list):
+                # Try to find which team this coach managed
+                team_for_search = teams_list[i] if i < len(teams_list) else ""
+                info = await resolver.search_specific_coach(cn, team_for_search or cn)
+                # Also search which team they're at
+                team_info = await resolver.search_coach_info(cn)
+                team = team_for_search or (team_info.get("team") if team_info else "") or cn
+                league = (team_info.get("league") if team_info else "") or (parsed.get("leagues", [None])[0] if parsed.get("leagues") else None)
+                resolved_coaches.append({
+                    "coach_name": cn,
+                    "team": team,
+                    "league": league,
+                    "coach_since": info.get("coach_since") if info else None,
+                    "coach_until": info.get("coach_until") if info else None,
+                })
+                logger.info("Resolved coach: %s → %s (%s) since=%s until=%s",
+                           cn, team, league,
+                           info.get("coach_since") if info else "?",
+                           info.get("coach_until") if info else "?")
+
+            if not resolved_coaches:
+                # Fallback to team-based comparison
+                await _handle_compare_coaches_by_teams(message, teams_list, parsed.get("leagues", []))
+            else:
+                await _handle_compare_coaches_resolved(message, resolved_coaches)
+
+        elif qtype == "coach":
             await message.answer("Ищу актуальную информацию о тренере...")
             team_name = parsed.get("team", names[0] if names else query)
             coach_name = parsed.get("coach_name")
 
-            # If Sonnet gave a coach name, search specifically for them
             if coach_name:
                 search_info = await resolver.search_specific_coach(coach_name, team_name)
                 if search_info:
                     parsed["coach_since"] = search_info.get("coach_since") or parsed.get("coach_since")
                     parsed["coach_until"] = search_info.get("coach_until") or parsed.get("coach_until")
+                # Also check which team
+                team_info = await resolver.search_coach_info(coach_name)
+                if team_info:
+                    if not parsed.get("team") or parsed["team"] == coach_name:
+                        parsed["team"] = team_info.get("team", team_name)
+                    if not parsed.get("league"):
+                        parsed["league"] = team_info.get("league")
             else:
-                # No coach name from Sonnet — search who's the current coach
                 search_info = await resolver.search_coach_info(team_name)
                 if search_info:
                     parsed["coach_name"] = search_info.get("coach_name")
@@ -266,22 +303,15 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                     if not parsed.get("team"):
                         parsed["team"] = search_info.get("team", team_name)
 
-            if qtype == "compare_coaches":
-                await _handle_compare_coaches(
-                    message,
-                    teams=parsed.get("teams", []),
-                    leagues=parsed.get("leagues", []),
-                )
-            else:
-                await _handle_team(
-                    message,
-                    team_name=parsed.get("team", team_name),
-                    league=parsed.get("league"),
-                    mode=qtype,
-                    coach_name=parsed.get("coach_name"),
-                    coach_since=parsed.get("coach_since"),
-                    coach_until=parsed.get("coach_until"),
-                )
+            await _handle_team(
+                message,
+                team_name=parsed.get("team", team_name),
+                league=parsed.get("league"),
+                mode=qtype,
+                coach_name=parsed.get("coach_name"),
+                coach_since=parsed.get("coach_since"),
+                coach_until=parsed.get("coach_until"),
+            )
         elif qtype == "team":
             await _handle_team(
                 message,
@@ -519,8 +549,43 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         text = format_team_data(team_data, sofa_team_stats, standings, manager, coach_name, coach_since, cup_results, coach_until)
         return text, None
 
-    async def _handle_compare_coaches(message: Message, teams: list[str], leagues: list[str]) -> None:
-        """Compare 2+ coaches by their team stats."""
+    async def _handle_compare_coaches_resolved(message: Message, coaches: list[dict]) -> None:
+        """Compare coaches with resolved team/date info from search."""
+        if len(coaches) < 2:
+            await message.answer("Нужно минимум 2 тренера для сравнения.")
+            return
+
+        coach_labels = [f"{c['coach_name']} ({c['team']})" for c in coaches]
+        await message.answer(f"Сравниваю: {', '.join(coach_labels)}...")
+
+        team_texts = []
+        for c in coaches:
+            if not c.get("league"):
+                await message.answer(f"Не удалось определить лигу для {c['coach_name']}.")
+                return
+            text, err = await _fetch_team_full(
+                c["team"], c["league"],
+                coach_name=c["coach_name"],
+                coach_since=c.get("coach_since"),
+                coach_until=c.get("coach_until"),
+            )
+            if err:
+                await message.answer(err)
+                return
+            team_texts.append(text)
+
+        final = await analyzer.compare_coaches(team_texts)
+        if final:
+            result = md_to_html(final)
+            for chunk in split_message(result):
+                await message.answer(chunk, parse_mode=ParseMode.HTML)
+        else:
+            combined = "\n\n".join(f"=== {c['coach_name']} ===\n{t}" for c, t in zip(coaches, team_texts))
+            for chunk in split_message(combined):
+                await message.answer(chunk)
+
+    async def _handle_compare_coaches_by_teams(message: Message, teams: list[str], leagues: list[str]) -> None:
+        """Fallback: compare by team names (when coach names not available)."""
         if len(teams) < 2:
             await message.answer("Нужно минимум 2 команды для сравнения.")
             return
