@@ -222,8 +222,11 @@ def format_team_data(team: Dict, sofa_team_stats: Optional[Dict] = None, standin
         lines.append(period)
     elif team.get("matches", 0) > 0:
         lines.append(f"Матчей в выборке: {team['matches']}")
-    lines.append(f"Матчей: {team['matches']} | {team['wins']}W {team['draws']}D {team['losses']}L | {team['points']} очков (PPG: {team['ppg']})")
-    lines.append(f"Голы: {team['goals']} забито, {team['conceded']} пропущено (разница: {team['gd']})")
+    cup_count = len(cup_results) if cup_results else 0
+    total_matches = team['matches'] + cup_count
+    lines.append(f"Матчей всего: {total_matches} (лига: {team['matches']}, кубки/еврокубки: {cup_count})")
+    lines.append(f"Лига: {team['wins']}W {team['draws']}D {team['losses']}L | {team['points']} очков (PPG: {team['ppg']})")
+    lines.append(f"Голы (лига): {team['goals']} забито, {team['conceded']} пропущено (разница: {team['gd']})")
     lines.append("")
 
     # xG analysis (only if Understat data available)
