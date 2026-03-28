@@ -243,21 +243,51 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         names = parsed["names"]
         hints = parsed.get("team_hints", [None] * len(names))
 
-        if qtype == "compare_coaches":
-            await _handle_compare_coaches(
-                message,
-                teams=parsed.get("teams", []),
-                leagues=parsed.get("leagues", []),
-            )
-        elif qtype in ("coach", "team"):
+        if qtype in ("coach", "compare_coaches"):
+            # Always use search model for fresh coach info
+            await message.answer("Ищу актуальную информацию о тренере...")
+            team_name = parsed.get("team", names[0] if names else query)
+            coach_name = parsed.get("coach_name")
+
+            # If Sonnet gave a coach name, search specifically for them
+            if coach_name:
+                search_info = await resolver.search_specific_coach(coach_name, team_name)
+                if search_info:
+                    parsed["coach_since"] = search_info.get("coach_since") or parsed.get("coach_since")
+                    parsed["coach_until"] = search_info.get("coach_until") or parsed.get("coach_until")
+            else:
+                # No coach name from Sonnet — search who's the current coach
+                search_info = await resolver.search_coach_info(team_name)
+                if search_info:
+                    parsed["coach_name"] = search_info.get("coach_name")
+                    parsed["coach_since"] = search_info.get("coach_since")
+                    if not parsed.get("league"):
+                        parsed["league"] = search_info.get("league")
+                    if not parsed.get("team"):
+                        parsed["team"] = search_info.get("team", team_name)
+
+            if qtype == "compare_coaches":
+                await _handle_compare_coaches(
+                    message,
+                    teams=parsed.get("teams", []),
+                    leagues=parsed.get("leagues", []),
+                )
+            else:
+                await _handle_team(
+                    message,
+                    team_name=parsed.get("team", team_name),
+                    league=parsed.get("league"),
+                    mode=qtype,
+                    coach_name=parsed.get("coach_name"),
+                    coach_since=parsed.get("coach_since"),
+                    coach_until=parsed.get("coach_until"),
+                )
+        elif qtype == "team":
             await _handle_team(
                 message,
                 team_name=parsed.get("team", names[0] if names else query),
                 league=parsed.get("league"),
                 mode=qtype,
-                coach_name=parsed.get("coach_name"),
-                coach_since=parsed.get("coach_since"),
-                coach_until=parsed.get("coach_until"),
             )
         elif qtype == "match":
             hint = hints[0] if hints else None
@@ -345,22 +375,21 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         except Exception:
             logger.exception("sofa team fetch failed")
 
-        # Auto-detect coach departure: if current manager differs, ask Sonnet for date
+        # Auto-detect coach departure via search if not already set
         if coach_name and not coach_until and manager:
             current_mgr = manager.get("name", "")
             if current_mgr and current_mgr.lower() != coach_name.lower():
-                logger.info("Coach mismatch: %s vs current %s, asking Sonnet for departure date", coach_name, current_mgr)
+                logger.info("Coach mismatch: %s vs current %s, searching for departure date", coach_name, current_mgr)
                 try:
-                    departure = await resolver._guess_coach_departure(coach_name, team_name, current_mgr)
-                    if departure:
-                        coach_until = departure
-                        logger.info("Sonnet says %s left on %s", coach_name, coach_until)
-                        # Re-fetch with corrected date range
+                    info = await resolver.search_specific_coach(coach_name, team_name)
+                    if info and info.get("coach_until"):
+                        coach_until = info["coach_until"]
+                        logger.info("Search says %s left on %s", coach_name, coach_until)
                         team_data = await team_client.get_team_season(team_name, league, coach_since=coach_since, coach_until=coach_until)
                         if not team_data:
                             return None, f"Нет данных за период {coach_since} — {coach_until}."
                 except Exception:
-                    logger.exception("coach departure detection failed")
+                    logger.exception("coach departure search failed")
 
         standings = None
         try:

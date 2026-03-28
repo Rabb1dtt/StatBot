@@ -563,14 +563,22 @@ class NameResolver:
         except Exception:
             return None
 
-    async def _guess_coach_departure(self, coach_name: str, team_name: str, current_manager: str) -> Optional[str]:
-        """Ask Sonnet when a coach left a club, given that a new manager is now in charge."""
+    async def search_coach_info(self, query: str) -> Optional[Dict]:
+        """Use search model to get current coach info for a team.
+        Returns: {coach_name, coach_since, coach_until, league} or None.
+        """
         if not self._llm:
             return None
         prompt = (
-            f"When did {coach_name} leave or get fired from {team_name} football club? "
-            f"I know the current manager is {current_manager}. "
-            f"Reply with ONLY the date in YYYY-MM-DD format. Nothing else."
+            f"Who is the current head coach/manager of {query} football club? "
+            f"When were they appointed? "
+            f"Reply in this EXACT format (one field per line):\n"
+            f"COACH_NAME: <full name>\n"
+            f"TEAM: <team name in English>\n"
+            f"LEAGUE: <league name: Premier League / LaLiga / Serie A / Bundesliga / Ligue 1 / RPL>\n"
+            f"COACH_SINCE: <YYYY-MM-DD appointment date>\n"
+            f"PREVIOUS_COACH: <name of previous coach or NONE>\n"
+            f"PREVIOUS_COACH_LEFT: <YYYY-MM-DD when previous coach left or NONE>"
         )
         try:
             def _call():
@@ -579,15 +587,77 @@ class NameResolver:
                     messages=[{"role": "user", "content": prompt}],
                 )
                 return resp.choices[0].message.content.strip()
-            result = await asyncio.to_thread(_call)
-            # Extract date from response (may have extra text)
-            import re as _re
-            date_match = _re.search(r'(\d{4}-\d{2}(?:-\d{2})?)', result or "")
-            if date_match:
-                d = date_match.group(1)
-                if len(d) == 7:
-                    d += "-28"
-                return d[:10]
+            text = await asyncio.to_thread(_call)
+
+            result = {}
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or ":" not in line:
+                    continue
+                key, val = line.split(":", 1)
+                key = key.strip().upper()
+                val = val.strip()
+                if val.upper() in ("NONE", "UNKNOWN", "N/A"):
+                    continue
+
+                if key == "COACH_NAME":
+                    result["coach_name"] = val
+                elif key == "TEAM":
+                    result["team"] = val
+                elif key == "LEAGUE":
+                    result["league"] = val
+                elif key == "COACH_SINCE":
+                    date_match = re.search(r'(\d{4}-\d{2}(?:-\d{2})?)', val)
+                    if date_match:
+                        d = date_match.group(1)
+                        result["coach_since"] = d if len(d) == 10 else d + "-01"
+                elif key == "PREVIOUS_COACH":
+                    result["previous_coach"] = val
+                elif key == "PREVIOUS_COACH_LEFT":
+                    date_match = re.search(r'(\d{4}-\d{2}(?:-\d{2})?)', val)
+                    if date_match:
+                        d = date_match.group(1)
+                        result["previous_coach_left"] = d if len(d) == 10 else d + "-01"
+
+            return result if result.get("coach_name") else None
+        except Exception:
             return None
+
+    async def search_specific_coach(self, coach_name: str, team_name: str) -> Optional[Dict]:
+        """Search for a SPECIFIC coach's tenure at a team (may be former coach)."""
+        if not self._llm:
+            return None
+        prompt = (
+            f"When was {coach_name} appointed as head coach of {team_name}? "
+            f"When did they leave (if they left)? "
+            f"Reply in this EXACT format:\n"
+            f"COACH_SINCE: <YYYY-MM-DD>\n"
+            f"COACH_UNTIL: <YYYY-MM-DD or CURRENT>"
+        )
+        try:
+            def _call():
+                resp = self._llm.chat.completions.create(
+                    model=self.model_search,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return resp.choices[0].message.content.strip()
+            text = await asyncio.to_thread(_call)
+
+            result = {}
+            for line in text.splitlines():
+                if "COACH_SINCE" in line.upper():
+                    m = re.search(r'(\d{4}-\d{2}(?:-\d{2})?)', line)
+                    if m:
+                        d = m.group(1)
+                        result["coach_since"] = d if len(d) == 10 else d + "-01"
+                elif "COACH_UNTIL" in line.upper():
+                    if "CURRENT" in line.upper():
+                        result["coach_until"] = None
+                    else:
+                        m = re.search(r'(\d{4}-\d{2}(?:-\d{2})?)', line)
+                        if m:
+                            d = m.group(1)
+                            result["coach_until"] = d if len(d) == 10 else d + "-28"
+            return result if result.get("coach_since") else None
         except Exception:
             return None
