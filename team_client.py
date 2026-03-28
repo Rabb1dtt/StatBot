@@ -226,32 +226,37 @@ def format_team_data(team: Dict, sofa_team_stats: Optional[Dict] = None, standin
     lines.append(f"Голы: {team['goals']} забито, {team['conceded']} пропущено (разница: {team['gd']})")
     lines.append("")
 
-    # xG analysis
-    lines.append("*Expected Goals:*")
-    lines.append(f"  xG: {team['xG']} | xGA: {team['xGA']} | xGD: {team['xGD']}")
-    lines.append(f"  npxG: {team['npxG']} | npxGA: {team['npxGA']}")
-    lines.append(f"  Голы − xG: {team['goals_minus_xG']} (реализация)")
-    lines.append(f"  Пропущенные − xGA: {team['conceded_minus_xGA']} (надёжность)")
-    lines.append("")
-
-    # Pressing
-    lines.append("*Прессинг:*")
-    ppda = team["ppda"]
-    if ppda < 8:
-        press_label = "агрессивный"
-    elif ppda < 11:
-        press_label = "умеренный"
+    # xG analysis (only if Understat data available)
+    if team.get("xG", 0) > 0:
+        lines.append("*Expected Goals:*")
+        lines.append(f"  xG: {team['xG']} | xGA: {team['xGA']} | xGD: {team['xGD']}")
+        lines.append(f"  npxG: {team['npxG']} | npxGA: {team['npxGA']}")
+        lines.append(f"  Голы − xG: {team['goals_minus_xG']} (реализация)")
+        lines.append(f"  Пропущенные − xGA: {team['conceded_minus_xGA']} (надёжность)")
     else:
-        press_label = "низкий"
-    lines.append(f"  PPDA: {ppda} ({press_label})")
-    lines.append(f"  OPPDA: {team['oppda']} (выход из-под чужого прессинга)")
+        lines.append("*xG данные: недоступны (лига не покрыта Understat)*")
     lines.append("")
 
-    # Deep completions
-    lines.append("*Проникновения в штрафную:*")
-    lines.append(f"  Deep completions: {team['deep']} ({team['deep_per_match']}/матч)")
-    lines.append(f"  Deep allowed: {team['deep_allowed']}")
-    lines.append("")
+    # Pressing (only with Understat)
+    if team.get("ppda", 0) > 0:
+        lines.append("*Прессинг:*")
+        ppda = team["ppda"]
+        if ppda < 8:
+            press_label = "агрессивный"
+        elif ppda < 11:
+            press_label = "умеренный"
+        else:
+            press_label = "низкий"
+        lines.append(f"  PPDA: {ppda} ({press_label})")
+        lines.append(f"  OPPDA: {team['oppda']} (выход из-под чужого прессинга)")
+        lines.append("")
+
+    # Deep completions (only with Understat)
+    if team.get("deep", 0) > 0:
+        lines.append("*Проникновения в штрафную:*")
+        lines.append(f"  Deep completions: {team['deep']} ({team['deep_per_match']}/матч)")
+        lines.append(f"  Deep allowed: {team['deep_allowed']}")
+        lines.append("")
 
     # SofaScore team stats
     if sofa_team_stats:

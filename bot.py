@@ -339,12 +339,30 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
 
     async def _fetch_team_full(team_name: str, league: str, coach_name: str | None = None, coach_since: str | None = None, coach_until: str | None = None) -> tuple[str | None, str | None]:
         """Fetch team data from Understat + SofaScore. Returns (formatted_text, error)."""
-        try:
-            team_data = await team_client.get_team_season(team_name, league, coach_since=coach_since, coach_until=coach_until)
-        except Exception as e:
-            return None, f"Ошибка для {team_name}: {e}"
+        us_league = UNDERSTAT_LEAGUES.get(league)
+        has_understat = us_league is not None
+
+        team_data = None
+        if has_understat:
+            try:
+                team_data = await team_client.get_team_season(team_name, league, coach_since=coach_since, coach_until=coach_until)
+            except Exception as e:
+                logger.warning("Understat failed for %s: %s", team_name, e)
+
         if not team_data:
-            return None, f"Не нашёл команду «{team_name}» в {league}."
+            # No Understat data — build minimal structure, will rely on SofaScore
+            team_data = {
+                "title": team_name, "matches": 0, "wins": 0, "draws": 0, "losses": 0,
+                "points": 0, "ppg": 0, "goals": 0, "conceded": 0, "gd": 0,
+                "xG": 0, "xGA": 0, "xGD": 0, "npxG": 0, "npxGA": 0,
+                "goals_minus_xG": 0, "conceded_minus_xGA": 0,
+                "ppda": 0, "oppda": 0, "deep": 0, "deep_allowed": 0, "deep_per_match": 0,
+                "form": [], "first_date": "?", "last_date": "?",
+            }
+            if has_understat:
+                logger.warning("No Understat data for %s in %s", team_name, league)
+            else:
+                logger.info("League %s not in Understat, using SofaScore only", league)
 
         sofa_team_stats = None
         manager = None
@@ -399,17 +417,19 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             pass
 
         # Cup/European results from SofaScore team events
+        # If no Understat → fetch ALL matches (including league) from SofaScore
         cup_results = []
+        sofa_league_results = []
         try:
             if sofa_team_id:
-                team_events = await sofa.get_team_events(sofa_team_id, max_pages=3)
-                league_tid = LEAGUE_TOURNAMENT_IDS.get(
-                    UNDERSTAT_LEAGUES.get(league, league) if league else ""
-                )
+                max_pages = 5 if not has_understat else 3
+                team_events = await sofa.get_team_events(sofa_team_id, max_pages=max_pages)
+                league_tid = LEAGUE_TOURNAMENT_IDS.get(us_league) if us_league else None
                 for e in team_events:
                     tid = e.get("tournament", {}).get("uniqueTournament", {}).get("id")
-                    # Skip league matches (already in Understat data)
-                    if tid == league_tid:
+                    # If we have Understat, skip league matches (already covered)
+                    is_league = (tid == league_tid) if league_tid else False
+                    if is_league and has_understat:
                         continue
                     # Filter by coach date range
                     ts = e.get("startTimestamp", 0)
@@ -468,6 +488,33 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         if coach_until and cup_results:
             cup_results = [c for c in cup_results
                           if not c.get("_date") or c["_date"] <= coach_until]
+
+        # If no Understat data, build team_data from SofaScore events
+        if not has_understat or team_data.get("matches", 0) == 0:
+            all_sofa = cup_results  # all events are in cup_results when no Understat
+            if all_sofa:
+                wins = sum(1 for m in all_sofa if m["result"] == "w")
+                draws = sum(1 for m in all_sofa if m["result"] == "d")
+                losses = sum(1 for m in all_sofa if m["result"] == "l")
+                gf = sum(m.get("goals_for", 0) for m in all_sofa)
+                ga = sum(m.get("goals_against", 0) for m in all_sofa)
+                matches = len(all_sofa)
+                dates = sorted(m["_date"] for m in all_sofa if m.get("_date"))
+                team_data = {
+                    "title": team_name,
+                    "matches": matches,
+                    "wins": wins, "draws": draws, "losses": losses,
+                    "points": wins * 3 + draws,
+                    "ppg": round((wins * 3 + draws) / max(matches, 1), 2),
+                    "goals": gf, "conceded": ga, "gd": gf - ga,
+                    "xG": 0, "xGA": 0, "xGD": 0, "npxG": 0, "npxGA": 0,
+                    "goals_minus_xG": 0, "conceded_minus_xGA": 0,
+                    "ppda": 0, "oppda": 0, "deep": 0, "deep_allowed": 0, "deep_per_match": 0,
+                    "form": [],
+                    "first_date": dates[0] if dates else "?",
+                    "last_date": dates[-1] if dates else "?",
+                }
+                logger.info("Built team_data from %d SofaScore events for %s", matches, team_name)
 
         text = format_team_data(team_data, sofa_team_stats, standings, manager, coach_name, coach_since, cup_results, coach_until)
         return text, None
