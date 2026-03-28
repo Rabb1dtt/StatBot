@@ -402,6 +402,10 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             else:
                 logger.info("League %s not in Understat, using SofaScore only", league)
 
+        # SofaScore team stats are season-wide, not per-coach period.
+        # Skip them if coach_until is set (partial season = stats would be misleading)
+        skip_sofa_stats = bool(coach_until)
+
         sofa_team_stats = None
         manager = None
         sofa_team_id = None
@@ -417,16 +421,17 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                         if team_info:
                             manager = team_info.get("team", {}).get("manager")
 
-                        # Stats
-                        us_league = UNDERSTAT_LEAGUES.get(league, league)
-                        ut_id = LEAGUE_TOURNAMENT_IDS.get(us_league)
-                        if ut_id:
-                            season_id = await sofa._get_current_season(ut_id)
-                            if season_id:
-                                data = await sofa._get(
-                                    f"/team/{sofa_team_id}/unique-tournament/{ut_id}/season/{season_id}/statistics/overall"
-                                )
-                                if data:
+                        # Stats (skip if partial season — would be misleading for coach comparison)
+                        if not skip_sofa_stats:
+                            us_league = UNDERSTAT_LEAGUES.get(league, league)
+                            ut_id = LEAGUE_TOURNAMENT_IDS.get(us_league)
+                            if ut_id:
+                                season_id = await sofa._get_current_season(ut_id)
+                                if season_id:
+                                    data = await sofa._get(
+                                        f"/team/{sofa_team_id}/unique-tournament/{ut_id}/season/{season_id}/statistics/overall"
+                                    )
+                                    if data:
                                     sofa_team_stats = data.get("statistics", {})
         except Exception:
             logger.exception("sofa team fetch failed")
