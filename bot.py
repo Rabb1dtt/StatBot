@@ -563,21 +563,22 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         return text, None
 
     async def _handle_compare_coaches_resolved(message: Message, coaches: list[dict]) -> None:
-        """Compare coaches with resolved team/date info from search."""
+        """Compare coaches: run full single analysis for each, then compare."""
         if len(coaches) < 2:
             await message.answer("Нужно минимум 2 тренера для сравнения.")
             return
 
         coach_labels = [f"{c['coach_name']} ({c['team']})" for c in coaches]
-        await message.answer(f"Сравниваю: {', '.join(coach_labels)}...")
+        await message.answer(f"Собираю данные: {', '.join(coach_labels)}...")
 
-        team_texts = []
+        # Run full single-coach analysis for each (same as _handle_team with mode=coach)
+        raw_texts = []
         for c in coaches:
             if not c.get("league"):
-                await message.answer(f"Не удалось определить лигу для {c['coach_name']}. Попробуй указать клуб.")
+                await message.answer(f"Не удалось определить лигу для {c['coach_name']}.")
                 return
             try:
-                logger.info("Fetching data for coach %s at %s (%s), since=%s, until=%s",
+                logger.info("Fetching full coach data: %s at %s (%s) %s→%s",
                            c["coach_name"], c["team"], c["league"], c.get("coach_since"), c.get("coach_until"))
                 text, err = await _fetch_team_full(
                     c["team"], c["league"],
@@ -588,25 +589,32 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                 if err:
                     await message.answer(f"{c['coach_name']}: {err}")
                     return
-                team_texts.append(text)
+
+                # Get individual AI analysis first (like single coach request)
+                single_analysis = await analyzer.analyze_coach(text)
+                if single_analysis:
+                    raw_texts.append(f"ТРЕНЕР: {c['coach_name']} ({c['team']})\n\nСЫРЫЕ ДАННЫЕ:\n{text}\n\nАНАЛИЗ:\n{single_analysis}")
+                else:
+                    raw_texts.append(f"ТРЕНЕР: {c['coach_name']} ({c['team']})\n\n{text}")
             except Exception as e:
                 logger.exception("Failed to fetch data for %s", c["coach_name"])
-                await message.answer(f"Ошибка при сборе данных для {c['coach_name']}: {type(e).__name__}: {e}")
+                await message.answer(f"Ошибка для {c['coach_name']}: {type(e).__name__}: {e}")
                 return
 
+        # Now compare the full analyses
         try:
-            final = await analyzer.compare_coaches(team_texts)
+            final = await analyzer.compare_coaches(raw_texts)
             if final:
                 result = md_to_html(final)
                 for chunk in split_message(result):
                     await message.answer(chunk, parse_mode=ParseMode.HTML)
             else:
-                combined = "\n\n".join(f"=== {c['coach_name']} ===\n{t}" for c, t in zip(coaches, team_texts))
+                combined = "\n\n———\n\n".join(raw_texts)
                 for chunk in split_message(combined):
                     await message.answer(chunk)
         except Exception as e:
-            logger.exception("compare_coaches analysis failed")
-            await message.answer(f"Ошибка анализа: {type(e).__name__}: {e}")
+            logger.exception("compare_coaches failed")
+            await message.answer(f"Ошибка сравнения: {type(e).__name__}: {e}")
 
     async def _handle_compare_coaches_by_teams(message: Message, teams: list[str], leagues: list[str]) -> None:
         """Fallback: compare by team names (when coach names not available)."""
