@@ -299,6 +299,16 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                         if not parsed.get("coach_until"):
                             parsed["coach_until"] = search_info.get("coach_until")
 
+                # Try to detect season from query text: "2024-2025" → since=2024-08, until=2025-06
+                if not parsed.get("coach_until") and not parsed.get("all_time"):
+                    import re as _re
+                    season_match = _re.search(r'(\d{4})\s*[-/]\s*(\d{4})', query)
+                    if season_match:
+                        y1, y2 = season_match.group(1), season_match.group(2)
+                        parsed["coach_since"] = f"{y1}-08-01"
+                        parsed["coach_until"] = f"{y2}-06-30"
+                        logger.info("Season from query: %s → %s", parsed["coach_since"], parsed["coach_until"])
+
                 # If coach is CURRENT (no until), no specific season, and NOT all_time →
                 # default to current season only
                 if (not parsed.get("coach_until")
