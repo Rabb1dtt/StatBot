@@ -203,18 +203,13 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         try:
             sofa_player = await sofa.search_player(resolved.name)
             if sofa_player:
-                if season_year and season_year != "2025":
-                    # Historical: paginate deep, filter by season dates, include cups
-                    cup_matches = await sofa.get_player_cup_matches_by_date(
-                        sofa_player["id"], CUP_TOURNAMENT_IDS,
-                        date_from=f"{season_year}-08-01",
-                        date_to=f"{int(season_year)+1}-06-30",
-                        max_pages=15,
-                    )
-                else:
-                    cup_matches = await sofa.get_cup_match_stats(
-                        sofa_player["id"], CUP_TOURNAMENT_IDS, max_matches=15,
-                    )
+                date_from = f"{season_year}-08-01" if season_year else None
+                date_to = f"{int(season_year)+1}-06-30" if season_year and season_year != "2025" else None
+                max_pages = 15 if season_year and season_year != "2025" else 10
+                cup_matches = await sofa.get_cup_match_stats(
+                    sofa_player["id"], CUP_TOURNAMENT_IDS,
+                    date_from=date_from, date_to=date_to, max_pages=max_pages,
+                )
                 cup_text = format_cup_matches(cup_matches)
                 if cup_text:
                     text += "\n\n" + cup_text
