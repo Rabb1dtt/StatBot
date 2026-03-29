@@ -99,15 +99,26 @@ class SofascoreClient:
         self._id_cache[name.lower()] = player
         return player
 
+    async def _get_seasons_list(self, tournament_id: int) -> List[Dict]:
+        """Get all seasons for a tournament. Cached."""
+        cache_key = f"_seasons_{tournament_id}"
+        cached = self._stats_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        data = await self._get(f"/unique-tournament/{tournament_id}/seasons")
+        if not data:
+            return []
+        seasons = data.get("seasons", [])
+        self._stats_cache[cache_key] = seasons
+        return seasons
+
     async def _get_current_season(self, tournament_id: int) -> Optional[int]:
         """Get current season ID for a tournament."""
         if tournament_id in self._season_cache:
             return self._season_cache[tournament_id]
 
-        data = await self._get(f"/unique-tournament/{tournament_id}/seasons")
-        if not data:
-            return None
-        seasons = data.get("seasons", [])
+        seasons = await self._get_seasons_list(tournament_id)
         if not seasons:
             return None
 
@@ -115,11 +126,25 @@ class SofascoreClient:
         self._season_cache[tournament_id] = season_id
         return season_id
 
+    async def _get_season_by_year(self, tournament_id: int, year: str) -> Optional[int]:
+        """Get season ID for a specific year (e.g. '2022' for 2022/2023 season)."""
+        seasons = await self._get_seasons_list(tournament_id)
+        for s in seasons:
+            # SofaScore season has "year" field (e.g. "22/23") or "name" (e.g. "2022/2023")
+            s_year = s.get("year", "")
+            s_name = s.get("name", "")
+            # Match: year="22/23" starts with last 2 digits, or name starts with full year
+            if s_name.startswith(year) or s_name.startswith(f"{year}/"):
+                return s["id"]
+            if s_year.startswith(year[-2:]):
+                return s["id"]
+        return None
+
     async def get_player_stats(
-        self, player_name: str, league: str,
+        self, player_name: str, league: str, season_year: str | None = None,
     ) -> Optional[Dict]:
-        """Get detailed season stats for a player."""
-        cache_key = f"{player_name}:{league}"
+        """Get detailed season stats for a player. season_year e.g. '2022' for 2022/2023."""
+        cache_key = f"{player_name}:{league}:{season_year or 'current'}"
         cached = self._stats_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -136,7 +161,10 @@ class SofascoreClient:
         if not ut_id:
             return None
 
-        season_id = await self._get_current_season(ut_id)
+        if season_year and season_year != "2025":
+            season_id = await self._get_season_by_year(ut_id, season_year)
+        else:
+            season_id = await self._get_current_season(ut_id)
         if not season_id:
             return None
 
@@ -158,9 +186,10 @@ class SofascoreClient:
         self._stats_cache[cache_key] = stats
         return stats
 
-    async def get_league_top10(self, league: str) -> Optional[str]:
+    async def get_league_top10(self, league: str, season_year: str | None = None) -> Optional[str]:
         """Get top 10 standings for a league. Returns formatted text."""
-        cached = self._standings_cache.get(league)
+        cache_key = f"{league}:{season_year or 'current'}"
+        cached = self._standings_cache.get(cache_key)
         if cached is not None:
             return cached
 
@@ -168,7 +197,10 @@ class SofascoreClient:
         if not ut_id:
             return None
 
-        season_id = await self._get_current_season(ut_id)
+        if season_year and season_year != "2025":
+            season_id = await self._get_season_by_year(ut_id, season_year)
+        else:
+            season_id = await self._get_current_season(ut_id)
         if not season_id:
             return None
 
@@ -183,7 +215,8 @@ class SofascoreClient:
             return None
 
         rows = standings[0].get("rows", [])
-        lines = [f"*Таблица {league} (топ-10 текущий сезон):*"]
+        season_label = f"сезон {season_year}/{int(season_year)+1}" if season_year and season_year != "2025" else "текущий сезон"
+        lines = [f"*Таблица {league} (топ-10 {season_label}):*"]
         for r in rows[:10]:
             t = r.get("team", {})
             name = t.get("name", "?")
@@ -197,7 +230,7 @@ class SofascoreClient:
             lines.append(f"  {pos}. {name} — {pts}pts ({w}W {d}D {l}L, {gf}-{ga})")
 
         result = "\n".join(lines)
-        self._standings_cache[league] = result
+        self._standings_cache[cache_key] = result
         return result
 
     # ── Player tournaments & per-match stats ────────────────────────
