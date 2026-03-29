@@ -229,6 +229,16 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         except Exception:
             logger.exception("standings fetch failed")
 
+        # Add web context: player role + team style (Sonar search)
+        try:
+            context = await resolver.search_player_context(
+                resolved.name, resolved.team, resolved.league, season_year=season_year,
+            )
+            if context:
+                text += "\n\n*Тактический контекст (веб-поиск):*\n" + context
+        except Exception:
+            logger.exception("player context search failed")
+
         # Cache the final text
         player_text_cache[cache_key] = text
         return text, None

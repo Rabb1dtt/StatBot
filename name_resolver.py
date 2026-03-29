@@ -717,3 +717,52 @@ class NameResolver:
             return result if result.get("coach_since") else None
         except Exception:
             return None
+
+    async def search_player_context(
+        self, player_name: str, team: str, league: str, season_year: str | None = None,
+    ) -> str | None:
+        """Search web for player's tactical role and team playing style.
+        Returns free-text context to feed into AI analysis.
+        """
+        if not self._llm:
+            return None
+
+        if season_year and season_year != "2025":
+            season_str = f"{season_year}/{int(season_year)+1}"
+            # For historical seasons, also ask which club they were at
+            prompt = (
+                f"Football player {player_name}. Season {season_str}.\n\n"
+                f"1) Which club did {player_name} play for in {season_str}? "
+                f"If they transferred mid-season, state both clubs and when.\n"
+                f"2) What was {player_name}'s tactical role and position at that club in {season_str}? "
+                f"(e.g. box-to-box midfielder, inverted winger, deep-lying playmaker, pressing forward, etc.)\n"
+                f"3) How did {team or 'that club'} play tactically in {season_str}? "
+                f"Formation, style (possession / counter-attack / pressing), manager's approach.\n"
+                f"4) Was {player_name} a starter, rotation player, or backup in {season_str}?\n\n"
+                f"Reply in 5-10 sentences. Be specific about THIS season, not current."
+            )
+        else:
+            season_str = "2025/2026"
+            prompt = (
+                f"Football player {player_name}, currently at {team} ({league}). Season {season_str}.\n\n"
+                f"1) What is {player_name}'s tactical role and position at {team}? "
+                f"(e.g. box-to-box midfielder, inverted winger, deep-lying playmaker, etc.)\n"
+                f"2) How does {team} play tactically this season? "
+                f"Formation, style (possession / counter-attack / pressing), manager's approach.\n"
+                f"3) Is {player_name} a starter, rotation player, or key player?\n\n"
+                f"Reply in 5-10 sentences. Be specific about THIS season."
+            )
+
+        try:
+            def _call():
+                resp = self._llm.chat.completions.create(
+                    model=self.model_search,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return resp.choices[0].message.content.strip()
+            text = await asyncio.to_thread(_call)
+            # Clean Perplexity citations
+            text = re.sub(r'\[\d+\]', '', text)
+            return text
+        except Exception:
+            return None
