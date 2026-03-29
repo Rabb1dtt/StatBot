@@ -343,7 +343,9 @@ class NameResolver:
             "- COUNT = number of matches. ALL if not specified\n"
             "- ALL_TIME = yes ONLY if user says 'за карьеру'/'за всё время'/'all time'/'за весь период'. Otherwise no\n"
             "- COACH_SINCE: appointment date as YYYY-MM-DD, or UNKNOWN\n"
-            "- COACH_UNTIL: departure date, or CURRENT, or UNKNOWN\n\n"
+            "- COACH_UNTIL: departure date, or CURRENT, or UNKNOWN\n"
+            "- SEASON: if user specifies a season (e.g. '2022-2023', 'сезон 2021/22'), extract the START YEAR as 4-digit number. NONE if current season\n"
+            "- TEAM_FILTER: if user specifies a specific club context (e.g. 'в Ман Сити', 'когда играл в Барселоне'), extract team name in English. NONE if not specified\n\n"
 
             "# EXAMPLES\n"
             "'Холанд' →\n"
@@ -389,6 +391,18 @@ class NameResolver:
             "TEAM2: Chelsea\n"
             "LEAGUE2: Premier League\n\n"
 
+            "'Де Брюйне сезон 2022-2023 в Ман Сити' →\n"
+            "TYPE: single\n"
+            "PLAYER1: Kevin De Bruyne\n"
+            "TEAM_HINT1: Manchester City\n"
+            "SEASON: 2022\n\n"
+
+            "'сравни Салаха 2021/22 и Мбаппе 2021/22' →\n"
+            "TYPE: compare\n"
+            "PLAYER1: Mohamed Salah\n"
+            "PLAYER2: Kylian Mbappe\n"
+            "SEASON: 2021\n\n"
+
             "# OUTPUT FORMAT\n"
             "Reply with ONLY the fields, one per line. No extra text, no explanations.\n"
             "Only include fields that are relevant to the detected TYPE.\n\n"
@@ -413,6 +427,8 @@ class NameResolver:
             all_time = False
             team_name = None
             league_name = None
+            season_year = None
+            team_filter = None
 
             for line in text.splitlines():
                 line = line.strip()
@@ -448,6 +464,15 @@ class NameResolver:
                             pass
                 elif key == "ALL_TIME":
                     all_time = val.lower() in ("yes", "true")
+                elif key == "SEASON":
+                    if val and val.upper() != "NONE":
+                        # Extract 4-digit year
+                        m = re.search(r'(\d{4})', val)
+                        if m:
+                            season_year = m.group(1)
+                elif key == "TEAM_FILTER":
+                    if val and val.upper() != "NONE":
+                        team_filter = val
                 elif key == "TEAM":
                     if val and val.upper() != "NONE":
                         team_name = val
@@ -535,11 +560,19 @@ class NameResolver:
             while len(team_hints) < len(names):
                 team_hints.append(None)
 
+            # Use team_filter as team_hint if no explicit hint
+            if team_filter and team_hints and all(h is None for h in team_hints):
+                team_hints[0] = team_filter
+
             result = {
                 "type": qtype,
                 "names": names,
                 "team_hints": team_hints,
             }
+            if season_year:
+                result["season"] = season_year
+            if team_filter:
+                result["team_filter"] = team_filter
             if qtype == "match":
                 result["opponent"] = opponent
                 result["tournament"] = tournament

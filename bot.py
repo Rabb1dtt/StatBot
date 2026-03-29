@@ -155,21 +155,23 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         sofa._id_cache.clear()
         await message.answer("Кэш очищен.")
 
-    async def _fetch_stats(name: str, team_hint: str | None = None) -> tuple[str | None, str | None]:
-        """Resolve + fetch stats. Returns (formatted_text, error). Cached 24h by player ID."""
+    async def _fetch_stats(name: str, team_hint: str | None = None, season_year: str | None = None) -> tuple[str | None, str | None]:
+        """Resolve + fetch stats. Returns (formatted_text, error). Cached 24h by player ID + season."""
         resolved = await resolver.resolve(name, team_hint=team_hint)
         if not resolved:
             return None, f"Не нашёл игрока «{name}». Доступны 6 лиг: EPL, La Liga, Serie A, Bundesliga, Ligue 1, РПЛ."
 
-        # Check cache
-        cached = player_text_cache.get(resolved.understat_id)
+        # Check cache (include season in key)
+        cache_key = (resolved.understat_id, season_year or "current")
+        cached = player_text_cache.get(cache_key)
         if cached:
-            logger.info("Cache hit: %s (id=%d)", resolved.name, resolved.understat_id)
+            logger.info("Cache hit: %s (id=%d, season=%s)", resolved.name, resolved.understat_id, season_year)
             return cached, None
 
-        season = await usc.get_current_season(resolved.understat_id)
+        target_season = season_year or "2025"
+        season = await usc.get_current_season(resolved.understat_id, season=target_season)
         if not season:
-            return None, f"Нет статистики за текущий сезон для {resolved.name}."
+            return None, f"Нет статистики за сезон {target_season}/{int(target_season)+1} для {resolved.name}."
 
         text = format_player_stats(
             name=resolved.name,
@@ -188,38 +190,41 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         except Exception:
             logger.exception("match breakdown failed")
 
-        # Add SofaScore dribbling/duels data
-        try:
-            sofa_stats = await sofa.get_player_stats(resolved.name, resolved.league)
-            extra = format_sofascore_extra(sofa_stats) if sofa_stats else ""
-            if extra:
-                text += "\n\n" + extra
-        except Exception:
-            logger.exception("sofascore fetch failed")
+        is_historical = season_year is not None and season_year != "2025"
 
-        # Add cup/european match stats
-        try:
-            sofa_player = await sofa.search_player(resolved.name)
-            if sofa_player:
-                cup_matches = await sofa.get_cup_match_stats(
-                    sofa_player["id"], CUP_TOURNAMENT_IDS, max_matches=15,
-                )
-                cup_text = format_cup_matches(cup_matches)
-                if cup_text:
-                    text += "\n\n" + cup_text
-        except Exception:
-            logger.exception("cup stats fetch failed")
+        # Add SofaScore dribbling/duels data (current season only)
+        if not is_historical:
+            try:
+                sofa_stats = await sofa.get_player_stats(resolved.name, resolved.league)
+                extra = format_sofascore_extra(sofa_stats) if sofa_stats else ""
+                if extra:
+                    text += "\n\n" + extra
+            except Exception:
+                logger.exception("sofascore fetch failed")
 
-        # Add league standings top 10
-        try:
-            standings = await sofa.get_league_top10(resolved.league)
-            if standings:
-                text += "\n\n" + standings
-        except Exception:
-            logger.exception("standings fetch failed")
+            # Add cup/european match stats
+            try:
+                sofa_player = await sofa.search_player(resolved.name)
+                if sofa_player:
+                    cup_matches = await sofa.get_cup_match_stats(
+                        sofa_player["id"], CUP_TOURNAMENT_IDS, max_matches=15,
+                    )
+                    cup_text = format_cup_matches(cup_matches)
+                    if cup_text:
+                        text += "\n\n" + cup_text
+            except Exception:
+                logger.exception("cup stats fetch failed")
+
+            # Add league standings top 10
+            try:
+                standings = await sofa.get_league_top10(resolved.league)
+                if standings:
+                    text += "\n\n" + standings
+            except Exception:
+                logger.exception("standings fetch failed")
 
         # Cache the final text
-        player_text_cache[resolved.understat_id] = text
+        player_text_cache[cache_key] = text
         return text, None
 
     @dp.message(F.text)
@@ -365,14 +370,14 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
                 all_time=parsed.get("all_time", False),
             )
         elif qtype == "compare" and len(names) >= 2:
-            await _handle_compare(message, names[:5], hints[:5])
+            await _handle_compare(message, names[:5], hints[:5], season_year=parsed.get("season"))
         else:
             hint = hints[0] if hints else None
-            await _handle_single(message, names[0] if names else query, hint)
+            await _handle_single(message, names[0] if names else query, hint, season_year=parsed.get("season"))
 
-    async def _handle_single(message: Message, name: str, team_hint: str | None = None) -> None:
+    async def _handle_single(message: Message, name: str, team_hint: str | None = None, season_year: str | None = None) -> None:
         try:
-            raw_text, err = await _fetch_stats(name, team_hint)
+            raw_text, err = await _fetch_stats(name, team_hint, season_year=season_year)
         except Exception as e:
             logger.exception("fetch failed")
             await message.answer(f"Ошибка: {type(e).__name__}: {e}")
@@ -882,7 +887,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             for chunk in split_message(raw_text):
                 await message.answer(chunk)
 
-    async def _handle_compare(message: Message, names: list[str], hints: list[str | None] | None = None) -> None:
+    async def _handle_compare(message: Message, names: list[str], hints: list[str | None] | None = None, season_year: str | None = None) -> None:
         await message.answer(f"Ищу {', '.join(names)}...")
 
         if not hints:
@@ -891,7 +896,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         player_texts: list[str] = []
         for name, hint in zip(names, hints):
             try:
-                text, err = await _fetch_stats(name, hint)
+                text, err = await _fetch_stats(name, hint, season_year=season_year)
             except Exception as e:
                 logger.exception("compare fetch failed for %s", name)
                 await message.answer(f"Ошибка для {name}: {type(e).__name__}: {e}")
