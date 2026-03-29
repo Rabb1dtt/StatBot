@@ -354,6 +354,73 @@ class SofascoreClient:
 
         return results
 
+    async def get_player_cup_matches_by_date(
+        self, player_id: int, tournament_ids: set[int],
+        date_from: str, date_to: str, max_pages: int = 15,
+    ) -> List[Dict]:
+        """
+        Get cup/european match stats for a player filtered by date range.
+        Paginates through player events (like coaches do with team events).
+        """
+        from datetime import datetime, timezone
+
+        all_events = []
+        reached_before = False
+        for page in range(max_pages):
+            events = await self.get_player_events(player_id, page)
+            if not events:
+                break
+            for e in events:
+                ts = e.get("startTimestamp", 0)
+                match_date = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d") if ts else ""
+                if match_date and match_date < date_from:
+                    reached_before = True
+                    break
+                if match_date and match_date > date_to:
+                    continue
+                tid = e.get("tournament", {}).get("uniqueTournament", {}).get("id")
+                if tid in tournament_ids:
+                    all_events.append(e)
+            if reached_before:
+                break
+
+        results = []
+        for e in all_events:
+            event_id = e["id"]
+            tournament = e.get("tournament", {}).get("uniqueTournament", {}).get("name", "?")
+            round_info = e.get("roundInfo", {})
+            round_name = round_info.get("name", round_info.get("round", "?"))
+            home = e.get("homeTeam", {}).get("name", "?")
+            away = e.get("awayTeam", {}).get("name", "?")
+            h_score = e.get("homeScore", {}).get("current", "?")
+            a_score = e.get("awayScore", {}).get("current", "?")
+
+            stage = ""
+            rn = str(round_name).lower()
+            if any(k in rn for k in ["final", "финал"]):
+                stage = "ФИНАЛ"
+            elif any(k in rn for k in ["semi", "полуфинал"]):
+                stage = "ПОЛУФИНАЛ"
+            elif any(k in rn for k in ["quarter", "четвертьфинал"]):
+                stage = "ЧЕТВЕРТЬФИНАЛ"
+            elif any(k in rn for k in ["round of 16", "1/8"]):
+                stage = "1/8 ФИНАЛА"
+            elif "knockout" in rn:
+                stage = "ПЛЕЙ-ОФФ"
+
+            stats = await self.get_player_event_stats(event_id, player_id)
+            results.append({
+                "tournament": tournament,
+                "round": str(round_name),
+                "stage": stage,
+                "home": home,
+                "away": away,
+                "score": f"{h_score}-{a_score}",
+                "stats": stats or {},
+            })
+
+        return results
+
 
 # ── Cup/European tournament IDs ────────────────────────────────
 CUP_TOURNAMENT_IDS = {

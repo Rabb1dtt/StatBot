@@ -199,19 +199,27 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
         except Exception:
             logger.exception("sofascore fetch failed")
 
-        # Add cup/european match stats (current season only — no historical cup data)
-        if not season_year or season_year == "2025":
-            try:
-                sofa_player = await sofa.search_player(resolved.name)
-                if sofa_player:
+        # Add cup/european match stats
+        try:
+            sofa_player = await sofa.search_player(resolved.name)
+            if sofa_player:
+                if season_year and season_year != "2025":
+                    # Historical: paginate deep, filter by season dates, include cups
+                    cup_matches = await sofa.get_player_cup_matches_by_date(
+                        sofa_player["id"], CUP_TOURNAMENT_IDS,
+                        date_from=f"{season_year}-08-01",
+                        date_to=f"{int(season_year)+1}-06-30",
+                        max_pages=15,
+                    )
+                else:
                     cup_matches = await sofa.get_cup_match_stats(
                         sofa_player["id"], CUP_TOURNAMENT_IDS, max_matches=15,
                     )
-                    cup_text = format_cup_matches(cup_matches)
-                    if cup_text:
-                        text += "\n\n" + cup_text
-            except Exception:
-                logger.exception("cup stats fetch failed")
+                cup_text = format_cup_matches(cup_matches)
+                if cup_text:
+                    text += "\n\n" + cup_text
+        except Exception:
+            logger.exception("cup stats fetch failed")
 
         # Add league standings
         try:
