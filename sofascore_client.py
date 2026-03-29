@@ -298,15 +298,29 @@ class SofascoreClient:
         self, player_id: int, tournament_ids: set[int], max_matches: int = 20,
     ) -> List[Dict]:
         """
-        Get per-match stats for cup/european matches.
+        Get per-match stats for cup/european matches (current season).
         Returns list of {tournament, round, opponent, score, stats}.
         """
+        from datetime import datetime, timezone
+
+        # Current season starts Aug 2025
+        season_start = "2025-08-01"
+
         all_events = []
-        for page in range(3):  # up to 3 pages of events
+        reached_before = False
+        for page in range(10):  # enough pages to cover full season
             events = await self.get_player_events(player_id, page)
             if not events:
                 break
-            all_events.extend(events)
+            for e in events:
+                ts = e.get("startTimestamp", 0)
+                match_date = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d") if ts else ""
+                if match_date and match_date < season_start:
+                    reached_before = True
+                    break
+                all_events.append(e)
+            if reached_before:
+                break
 
         # Filter to requested tournaments
         cup_events = [
