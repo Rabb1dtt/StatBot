@@ -277,6 +277,48 @@ class SofascoreClient:
             return None
         return data.get("statistics", {})
 
+    async def get_player_all_tournaments_stats(
+        self, player_id: int, season_year: str | None = None,
+    ) -> List[Dict]:
+        """Get aggregate stats for a player across ALL tournaments in a season.
+
+        Returns list of dicts: [{tournament_name, tournament_id, season_name, stats: {...}}, ...]
+        """
+        tournaments = await self.get_player_tournaments(player_id)
+        if not tournaments:
+            return []
+
+        # Filter to matching season
+        target = season_year or "2025"
+        matched = []
+        for t in tournaments:
+            sname = t.get("season_name", "")
+            if sname.startswith(target) or sname.startswith(f"{target}/"):
+                matched.append(t)
+
+        if not matched:
+            # Fallback: take first (current) season for each tournament
+            seen_tids: set[int] = set()
+            for t in tournaments:
+                tid = t["tournament_id"]
+                if tid not in seen_tids:
+                    seen_tids.add(tid)
+                    matched.append(t)
+
+        results = []
+        for t in matched:
+            stats = await self.get_player_tournament_aggregate(
+                player_id, t["tournament_id"], t["season_id"],
+            )
+            if stats:
+                results.append({
+                    "tournament_name": t["tournament_name"],
+                    "tournament_id": t["tournament_id"],
+                    "season_name": t["season_name"],
+                    "stats": stats,
+                })
+        return results
+
     async def get_player_events(self, player_id: int, page: int = 0) -> List[Dict]:
         """Get recent events (matches) for a player, sorted by date descending."""
         data = await self._get(f"/player/{player_id}/events/last/{page}")
@@ -704,4 +746,70 @@ def format_sofascore_extra(stats: Dict) -> str:
 
     if not lines:
         return ""
+    return "\n".join(lines)
+
+
+def format_tournament_aggregates(tournament_stats: list[dict]) -> str:
+    """Format per-tournament aggregate stats from SofaScore.
+
+    Each entry: {tournament_name, stats: {rating, goals, assists, ...}}
+    """
+    if not tournament_stats:
+        return ""
+
+    lines = ["*Статистика по турнирам (SofaScore, агрегаты):*"]
+
+    for ts in tournament_stats:
+        tname = ts.get("tournament_name", "?")
+        s = ts.get("stats", {})
+
+        rating = s.get("rating")
+        appearances = s.get("appearances") or s.get("matchesStarted", 0)
+        goals = s.get("goals", 0)
+        assists = s.get("assists", 0) or s.get("goalAssist", 0)
+        minutes = s.get("minutesPlayed", 0)
+
+        header = f"  *{tname}*: {appearances} матчей, {minutes} минут"
+        if rating:
+            header += f", рейтинг {rating:.2f}" if isinstance(rating, float) else f", рейтинг {rating}"
+        lines.append(header)
+
+        # Key stats
+        parts = []
+        if goals:
+            parts.append(f"{goals}г")
+        if assists:
+            parts.append(f"{assists}а")
+        xg = s.get("expectedGoals")
+        xa = s.get("expectedAssists")
+        if xg is not None:
+            parts.append(f"xG {xg:.2f}" if isinstance(xg, float) else f"xG {xg}")
+        if xa is not None:
+            parts.append(f"xA {xa:.2f}" if isinstance(xa, float) else f"xA {xa}")
+
+        tackles = s.get("tackles")
+        interceptions = s.get("interceptions")
+        if tackles:
+            parts.append(f"{tackles} отборов")
+        if interceptions:
+            parts.append(f"{interceptions} перехватов")
+
+        duels_won = s.get("totalDuelsWon")
+        duels_pct = s.get("totalDuelsWonPercentage")
+        if duels_won:
+            dp = f" ({duels_pct:.0f}%)" if duels_pct else ""
+            parts.append(f"{duels_won} единоборств{dp}")
+
+        dribbles = s.get("successfulDribbles")
+        dribble_total = s.get("totalContest")
+        if dribbles is not None and dribble_total:
+            parts.append(f"дриблинг {dribbles}/{dribble_total}")
+
+        key_passes = s.get("keyPasses")
+        if key_passes:
+            parts.append(f"{key_passes} ключ.пасов")
+
+        if parts:
+            lines.append(f"    {' | '.join(parts)}")
+
     return "\n".join(lines)

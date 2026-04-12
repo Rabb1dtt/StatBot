@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from stats_formatter import format_player_stats, format_match_breakdown
-from sofascore_client import format_sofascore_extra, format_cup_matches, CUP_TOURNAMENT_IDS
+from sofascore_client import (
+    format_sofascore_extra, format_cup_matches, format_tournament_aggregates,
+    CUP_TOURNAMENT_IDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +34,16 @@ async def get_player_stats(
     team_hint: str = "",
     season_year: str = "",
 ) -> str:
-    """Fetch full season stats for a player: Understat + SofaScore + cup + standings + web context."""
+    """Fetch full season stats: SofaScore (primary) + Understat (xG progression) + cups + standings.
+
+    Data priority:
+    1. SofaScore league aggregate — main stats (defense, dribbling, duels, passing, shooting)
+    2. SofaScore ALL tournaments aggregates — ЛЧ, кубки, лига отдельно
+    3. SofaScore cup per-match stats — detailed big match data
+    4. Understat season — xGChain, xGBuildup (ball progression not in SofaScore)
+    5. Understat per-opponent breakdown — strength check vs top clubs
+    6. League standings — context for opponent strength
+    """
     resolver = clients["resolver"]
     usc = clients["usc"]
     sofa = clients["sofa"]
@@ -40,40 +52,36 @@ async def get_player_stats(
     if not resolved:
         return f"Player '{player_name}' not found. Available leagues: EPL, La Liga, Serie A, Bundesliga, Ligue 1, RPL."
 
-    target_season = season_year or "2025"
-    season = await usc.get_current_season(resolved.understat_id, season=target_season)
-    if not season:
-        return f"No stats for season {target_season}/{int(target_season)+1} for {resolved.name}."
+    sections: list[str] = []
 
-    text = format_player_stats(
-        name=resolved.name,
-        team=resolved.team,
-        league=resolved.league,
-        position=resolved.position,
-        stats=season,
-    )
-
-    # Per-opponent breakdown
+    # ── 1. SofaScore league aggregate (PRIMARY) ──────────────────────
+    sofa_stats = None
     try:
-        matches = await usc.get_match_stats(resolved.understat_id)
-        breakdown = format_match_breakdown(resolved.team, matches, season.get("season", "2025"))
-        if breakdown:
-            text += "\n\n" + breakdown
-    except Exception:
-        logger.exception("match breakdown failed")
-
-    # SofaScore dribbling/duels
-    try:
-        sofa_stats = await sofa.get_player_stats(resolved.name, resolved.league, season_year=season_year or None)
+        sofa_stats = await sofa.get_player_stats(
+            resolved.name, resolved.league, season_year=season_year or None,
+        )
         extra = format_sofascore_extra(sofa_stats) if sofa_stats else ""
         if extra:
-            text += "\n\n" + extra
+            sections.append(extra)
     except Exception:
-        logger.exception("sofascore fetch failed")
+        logger.exception("sofascore league stats failed")
 
-    # Cup/european match stats
+    # ── 2. SofaScore ALL tournaments aggregates ──────────────────────
+    sofa_player = None
     try:
         sofa_player = await sofa.search_player(resolved.name)
+        if sofa_player:
+            all_tourney_stats = await sofa.get_player_all_tournaments_stats(
+                sofa_player["id"], season_year=season_year or None,
+            )
+            tourney_text = format_tournament_aggregates(all_tourney_stats)
+            if tourney_text:
+                sections.append(tourney_text)
+    except Exception:
+        logger.exception("sofascore all tournaments failed")
+
+    # ── 3. SofaScore cup per-match stats (big matches) ───────────────
+    try:
         if sofa_player:
             date_from = f"{season_year}-08-01" if season_year else None
             date_to = f"{int(season_year)+1}-06-30" if season_year and season_year != "2025" else None
@@ -84,19 +92,53 @@ async def get_player_stats(
             )
             cup_text = format_cup_matches(cup_matches)
             if cup_text:
-                text += "\n\n" + cup_text
+                sections.append(cup_text)
     except Exception:
         logger.exception("cup stats fetch failed")
 
-    # League standings
+    # ── 4. Understat season (xGChain, xGBuildup, basic goals/xG) ────
+    target_season = season_year or "2025"
+    understat_season = None
+    try:
+        understat_season = await usc.get_current_season(resolved.understat_id, season=target_season)
+        if understat_season:
+            us_text = format_player_stats(
+                name=resolved.name,
+                team=resolved.team,
+                league=resolved.league,
+                position=resolved.position,
+                stats=understat_season,
+            )
+            sections.insert(0, us_text)  # Put header/basic stats first
+    except Exception:
+        logger.exception("understat season failed")
+
+    # If no Understat, build a minimal header
+    if not understat_season:
+        header = f"*{resolved.name}* ({resolved.team}) — {resolved.position}\n{resolved.league}"
+        sections.insert(0, header)
+
+    # ── 5. Understat per-opponent breakdown (strength check) ─────────
+    try:
+        matches = await usc.get_match_stats(resolved.understat_id)
+        breakdown = format_match_breakdown(
+            resolved.team, matches,
+            understat_season.get("season", "2025") if understat_season else "2025",
+        )
+        if breakdown:
+            sections.append(breakdown)
+    except Exception:
+        logger.exception("match breakdown failed")
+
+    # ── 6. League standings ──────────────────────────────────────────
     try:
         standings = await sofa.get_league_top10(resolved.league, season_year=season_year or None)
         if standings:
-            text += "\n\n" + standings
+            sections.append(standings)
     except Exception:
         logger.exception("standings fetch failed")
 
-    return text
+    return "\n\n".join(sections) if sections else f"No data found for {resolved.name}."
 
 
 async def get_match_breakdown(
