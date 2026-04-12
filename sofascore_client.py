@@ -289,11 +289,20 @@ class SofascoreClient:
             return []
 
         # Filter to matching season
+        # SofaScore season names vary: "LaLiga 25/26", "UEFA Champions League 25/26",
+        # "Copa del Rey 24/25", "2024/2025", etc.
         target = season_year or "2025"
+        target_short = target[-2:]  # "2025" -> "25"
         matched = []
         for t in tournaments:
             sname = t.get("season_name", "")
-            if sname.startswith(target) or sname.startswith(f"{target}/"):
+            # Match: "2025", "2025/", "25/26", " 25/26"
+            if (sname.startswith(target)
+                    or sname.startswith(f"{target}/")
+                    or f" {target_short}/" in sname
+                    or sname.endswith(f" {target_short}/{int(target_short)+1:02d}")
+                    or f"{target_short}/{int(target_short)+1:02d}" in sname
+                    or sname.endswith(f" {target}")):
                 matched.append(t)
 
         if not matched:
