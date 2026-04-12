@@ -107,6 +107,14 @@ SYSTEM_PROMPT = """Ты — футбольный аналитик-эксперт
 - Форма
 - Вердикт X.XX/10
 
+ОБЪЕКТИВНОСТЬ (КРИТИЧНО):
+- Твой анализ строится ИСКЛЮЧИТЕЛЬНО на числовых данных из инструментов (Understat, SofaScore).
+- Блок [WEB CONTEXT] используй ТОЛЬКО для фактов: текущий клуб, позиция, тактическая роль, тренер, трансферы.
+- ПОЛНОСТЬЮ ИГНОРИРУЙ из [WEB CONTEXT]: оценки журналистов, рейтинги агрегаторов, хвалебные/критические заголовки, мнения экспертов, награды, медийный хайп, "лучший игрок мира", "провал сезона" и т.п.
+- НЕ ПОЗВОЛЯЙ репутации игрока влиять на твою оценку. Салах с xG 4.0 получает низкую оценку так же, как новичок с xG 4.0. Числа одинаковые — вывод одинаковый.
+- Если данные из инструментов противоречат мнениям из [WEB CONTEXT] — ВСЕГДА верь данным.
+- search_web_context используй только для фактической информации (роль в команде, схема, тренер), НЕ для оценок и мнений.
+
 ПРАВИЛА:
 - Числа не менять. Per90 не пересчитывать.
 - НЕ добавляй метрики, которых нет в данных.
@@ -304,7 +312,13 @@ async def _pre_search(user_query: str, llm: LLMClient) -> str:
         logger.info("Pre-search query: %s", search_query)
 
         result = await llm.chat(
-            messages=[{"role": "user", "content": search_query}],
+            messages=[{"role": "user", "content": (
+                f"{search_query}\n\n"
+                "Reply with FACTS ONLY: current club, position, tactical role, manager, "
+                "formation, recent transfers, injury status. "
+                "DO NOT include: journalist opinions, ratings, awards, 'best/worst' judgments, "
+                "media narratives, aggregator scores, or any subjective assessments."
+            )}],
             model_type="search",
             temperature=0.3,
             max_tokens=2000,
