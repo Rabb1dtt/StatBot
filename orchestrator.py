@@ -244,20 +244,29 @@ def _build_tool_schemas(tool_names: list[str]) -> list[dict[str, Any]]:
     return schemas
 
 
+MAX_TOOL_RESULT_CHARS = 12000  # Limit tool output to avoid context overflow
+
+
 def _serialize_tool_result(result: Any) -> str:
     """Serialize tool result to text for the agent."""
     if result is None:
         return "No data"
     if isinstance(result, str):
-        return result
-    if isinstance(result, list):
+        text = result
+    elif isinstance(result, list):
         if not result:
             return "Empty list"
         items = []
         for i, item in enumerate(result, 1):
             items.append(f"[{i}] {item}")
-        return "\n".join(items)
-    return str(result)
+        text = "\n".join(items)
+    else:
+        text = str(result)
+
+    # Truncate if too long
+    if len(text) > MAX_TOOL_RESULT_CHARS:
+        text = text[:MAX_TOOL_RESULT_CHARS] + "\n\n[... truncated, data too large ...]"
+    return text
 
 
 # ── Pre-search ───────────────────────────────────────────────────────
@@ -335,17 +344,36 @@ async def execute_query(
 
     # 5. Agentic loop
     called_tools: list[str] = []
+    seen_calls: set[str] = set()  # track (fn_name, args_hash) to detect loops
     for iteration in range(MAX_ITERATIONS):
+        # On last 2 iterations, stop offering tools to force a final answer
+        current_tools = tool_schemas if iteration < MAX_ITERATIONS - 2 else []
+
+        logger.info("Orchestrator iteration %d/%d, tools called so far: %s",
+                     iteration + 1, MAX_ITERATIONS, called_tools)
+
         response = await llm.chat_with_tools(
             messages=messages,
-            tools=tool_schemas,
+            tools=current_tools,
             model_type="heavy",
             temperature=0.6,
         )
 
+        # Log what we got back
+        has_content = bool(response.get("content"))
+        has_tools = bool(response.get("tool_calls"))
+        logger.info("Iteration %d response: content=%s, tool_calls=%s",
+                     iteration + 1, len(response["content"]) if response.get("content") else 0,
+                     len(response["tool_calls"]) if response.get("tool_calls") else 0)
+
         # No tool_calls → final answer
-        if not response.get("tool_calls"):
+        if not has_tools:
             content = response.get("content", "")
+            if not content:
+                # Empty response — force a text-only completion
+                logger.warning("Empty response at iteration %d, forcing text completion", iteration + 1)
+                messages.append({"role": "user", "content": "Now write your final analysis based on the data above. No more tool calls."})
+                continue
             logger.info(
                 "Orchestrator done in %d iterations, tools called: %s",
                 iteration + 1, called_tools,
@@ -361,7 +389,6 @@ async def execute_query(
 
         for tool_call in response["tool_calls"]:
             fn_name = tool_call["function"]["name"]
-            called_tools.append(fn_name)
             fn_args_raw = tool_call["function"].get("arguments", "{}")
 
             try:
@@ -369,7 +396,23 @@ async def execute_query(
             except json.JSONDecodeError:
                 fn_args = {}
 
+            # Detect duplicate calls (same tool + same args)
+            call_sig = f"{fn_name}:{json.dumps(fn_args, sort_keys=True)}"
+            if call_sig in seen_calls:
+                logger.warning("Duplicate tool call detected: %s, returning cached hint", fn_name)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call["id"],
+                    "content": "You already called this tool with the same arguments. Use the data you already have.",
+                })
+                continue
+
+            seen_calls.add(call_sig)
+            called_tools.append(fn_name)
+
+            logger.info("Executing tool: %s(%s)", fn_name, fn_args)
             tool_result = await _execute_tool(fn_name, fn_args, clients)
+            logger.info("Tool %s returned %d chars", fn_name, len(tool_result))
 
             messages.append({
                 "role": "tool",
@@ -377,8 +420,23 @@ async def execute_query(
                 "content": tool_result,
             })
 
-    logger.warning("Orchestrator exceeded %d iterations", MAX_ITERATIONS)
-    return "Превышен лимит итераций. Попробуй упростить запрос."
+    # If we exhausted iterations, try one last text-only call
+    logger.warning("Orchestrator exceeded %d iterations, forcing final answer", MAX_ITERATIONS)
+    messages.append({"role": "user", "content": "Write your final analysis NOW based on all the data you have collected. Do not call any more tools."})
+    try:
+        response = await llm.chat_with_tools(
+            messages=messages,
+            tools=[],  # no tools — force text
+            model_type="heavy",
+            temperature=0.6,
+        )
+        content = response.get("content", "")
+        if content:
+            return content
+    except Exception:
+        logger.exception("Final forced completion failed")
+
+    return "Не удалось сформировать ответ. Попробуй переформулировать запрос."
 
 
 async def _execute_tool(
