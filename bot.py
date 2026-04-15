@@ -125,6 +125,7 @@ async def create_bot() -> tuple[Bot, Dispatcher, PlayerDB]:
             "heavy": config.MODEL_ANALYSIS,
             "light": config.MODEL_TRANSLATE,
             "search": config.MODEL_SEARCH,
+            "router": config.MODEL_ORCHESTRATOR,
         },
     )
 
