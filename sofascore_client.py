@@ -456,11 +456,13 @@ def format_cup_matches(matches: List[Dict]) -> str:
         assists = s.get("goalAssist", 0) or 0
         xg = s.get("expectedGoals")
         xa = s.get("expectedAssists")
-        tackles = s.get("tackles", 0) or 0
-        dribbles = s.get("successfulDribbles", 0) or 0
+        tackles = s.get("totalTackle", 0) or 0
+        dribbles = s.get("wonContest", 0) or 0
+        dribble_attempts = s.get("totalContest", 0) or 0
         duels_won = s.get("duelWon", 0) or 0
         passes = s.get("accuratePass", 0) or 0
         total_pass = s.get("totalPass", 0) or 0
+        interceptions = s.get("interceptionWon", 0) or 0
 
         xg_str = f"xG {xg:.2f}" if xg else ""
         xa_str = f"xA {xa:.2f}" if xa else ""
@@ -472,7 +474,7 @@ def format_cup_matches(matches: List[Dict]) -> str:
         )
         lines.append(
             f"    {mins}мин | рейтинг {rating} | {goals}г {assists}а{xg_xa} | "
-            f"отб {tackles} дриб {dribbles} ед {duels_won} пас {passes}/{total_pass}"
+            f"отб {tackles} перехв {interceptions} дриб {dribbles}/{dribble_attempts} ед {duels_won} пас {passes}/{total_pass}"
         )
 
     return "\n".join(lines)
