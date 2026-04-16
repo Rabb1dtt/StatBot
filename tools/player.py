@@ -229,6 +229,13 @@ async def get_match_breakdown(
         "saves": "Saves", "goalsPrevented": "Goals prevented",
     }
 
+    # Keys that should always be shown (even if 0) so the LLM sees explicit zeros
+    always_show = {
+        "goals", "goalAssist", "expectedGoals", "expectedAssists",
+        "successfulDribbles", "dribbleAttempts", "keyPass",
+        "tackles", "interceptions", "shotsOnTarget", "totalShots",
+    }
+
     lines = [f"Player: {resolved.name} ({resolved.team})"]
     if len(target_events) > 1:
         lines.append(f"Matches found: {len(target_events)} (chronological order)")
@@ -262,7 +269,7 @@ async def get_match_breakdown(
 
         for key, label in stat_labels.items():
             val = stats.get(key)
-            if val is not None and val != 0:
+            if val is not None and (val != 0 or key in always_show):
                 if isinstance(val, float):
                     lines.append(f"  {label}: {val:.2f}")
                 else:
