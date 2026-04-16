@@ -212,27 +212,57 @@ async def get_match_breakdown(
         target_events.sort(key=lambda e: e.get("startTimestamp", 0))
 
     stat_labels = {
+        # Attacking
         "goals": "Goals", "goalAssist": "Assists",
         "expectedGoals": "xG", "expectedAssists": "xA",
+        "expectedGoalsOnTarget": "xGOT",
         "totalShots": "Shots", "onTargetScoringAttempt": "Shots on target",
         "blockedScoringAttempt": "Shots blocked",
+        "bigChanceCreated": "Big chances created",
+        # Passing
         "accuratePass": "Accurate passes", "totalPass": "Total passes",
-        "accurateLongBalls": "Accurate long balls", "totalLongBalls": "Long balls",
-        "accurateCross": "Accurate crosses", "totalCross": "Crosses",
         "accurateOppositionHalfPasses": "Accurate opp. half passes",
         "totalOppositionHalfPasses": "Total opp. half passes",
-        "keyPass": "Key passes", "bigChanceCreated": "Big chances created",
+        "accurateOwnHalfPasses": "Accurate own half passes",
+        "totalOwnHalfPasses": "Total own half passes",
+        "accurateLongBalls": "Accurate long balls", "totalLongBalls": "Long balls",
+        "accurateCross": "Accurate crosses", "totalCross": "Crosses",
+        "keyPass": "Key passes",
+        # Dribbling & ball carries
+        "wonContest": "Successful dribbles", "totalContest": "Dribble attempts",
+        "dispossessed": "Dispossessed",
+        "ballCarriesCount": "Ball carries",
+        "progressiveBallCarriesCount": "Progressive ball carries",
+        "totalBallCarriesDistance": "Ball carries distance (m)",
+        "totalProgressiveBallCarriesDistance": "Progressive carries distance (m)",
+        "bestBallCarryProgression": "Best carry progression (m)",
+        "totalProgression": "Total progression (m)",
+        # Defensive
         "totalTackle": "Tackles", "interceptionWon": "Interceptions",
         "totalClearance": "Clearances", "ballRecovery": "Ball recoveries",
         "challengeLost": "Challenges lost",
+        # Duels
         "duelWon": "Duels won", "duelLost": "Duels lost",
         "aerialWon": "Aerials won", "aerialLost": "Aerials lost",
-        "wonContest": "Successful dribbles", "totalContest": "Dribble attempts",
-        "dispossessed": "Dispossessed",
+        # Possession
         "touches": "Touches",
         "possessionLostCtrl": "Possession lost",
+        "unsuccessfulTouch": "Unsuccessful touches",
+        # Physical
+        "kilometersCovered": "Distance covered (km)",
+        "numberOfSprints": "Sprints",
+        "topSpeed": "Top speed (km/h)",
+        "metersCoveredSprintingKm": "Sprinting distance (km)",
+        "metersCoveredHighSpeedRunningKm": "High-speed running (km)",
+        "metersCoveredRunningKm": "Running distance (km)",
+        # Discipline & other
         "fouls": "Fouls", "wasFouled": "Was fouled",
         "saves": "Saves", "goalsPrevented": "Goals prevented",
+        # SofaScore AI value scores (0-1 normalized)
+        "dribbleValueNormalized": "Dribble value (AI)",
+        "passValueNormalized": "Pass value (AI)",
+        "shotValueNormalized": "Shot value (AI)",
+        "defensiveValueNormalized": "Defensive value (AI)",
     }
 
     # Keys that should always be shown (even if 0) so the LLM sees explicit zeros
@@ -240,6 +270,7 @@ async def get_match_breakdown(
         "goals", "goalAssist", "expectedGoals", "expectedAssists",
         "wonContest", "totalContest", "keyPass",
         "totalTackle", "interceptionWon", "onTargetScoringAttempt", "totalShots",
+        "possessionLostCtrl", "progressiveBallCarriesCount", "ballCarriesCount",
     }
 
     lines = [f"Player: {resolved.name} ({resolved.team})"]
@@ -280,6 +311,26 @@ async def get_match_breakdown(
                     lines.append(f"  {label}: {val:.2f}")
                 else:
                     lines.append(f"  {label}: {val}")
+
+        # === Heatmap analysis ===
+        heatmap_data = await sofa._get(f"/event/{event_id}/player/{player_id}/heatmap")
+        if heatmap_data:
+            points = heatmap_data.get("heatmap", [])
+            if points:
+                n = len(points)
+                own = sum(1 for p in points if p["x"] < 33)
+                mid = sum(1 for p in points if 33 <= p["x"] < 66)
+                att = n - own - mid
+                left = sum(1 for p in points if p["y"] < 33)
+                center = sum(1 for p in points if 33 <= p["y"] < 66)
+                right_side = n - left - center
+                avg_x = sum(p["x"] for p in points) / n
+                avg_y = sum(p["y"] for p in points) / n
+                lines.append(f"  --- Heatmap ({n} points) ---")
+                lines.append(f"  Avg position: x={avg_x:.1f} y={avg_y:.1f} (x: 0=own goal, 100=opp goal; y: 0=left, 100=right)")
+                lines.append(f"  Zones: own third {own} ({own*100//n}%) | middle {mid} ({mid*100//n}%) | attacking {att} ({att*100//n}%)")
+                lines.append(f"  Width: left {left} ({left*100//n}%) | center {center} ({center*100//n}%) | right {right_side} ({right_side*100//n}%)")
+
         lines.append("")
 
     return "\n".join(lines)

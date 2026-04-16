@@ -472,10 +472,28 @@ def format_cup_matches(matches: List[Dict]) -> str:
             f"  {m['tournament']} R{m['round']}{stage_tag}: "
             f"{m['home']} {m['score']} {m['away']}"
         )
+        key_pass = s.get("keyPass", 0) or 0
+        big_chance = s.get("bigChanceCreated", 0) or 0
+        poss_lost = s.get("possessionLostCtrl", 0) or 0
+        prog_carries = s.get("progressiveBallCarriesCount", 0) or 0
+        ball_carries = s.get("ballCarriesCount", 0) or 0
+
         lines.append(
             f"    {mins}мин | рейтинг {rating} | {goals}г {assists}а{xg_xa} | "
             f"отб {tackles} перехв {interceptions} дриб {dribbles}/{dribble_attempts} ед {duels_won} пас {passes}/{total_pass}"
         )
+        # Second line: quality & progression metrics
+        extra_parts = []
+        if key_pass:
+            extra_parts.append(f"ключ.пас {key_pass}")
+        if big_chance:
+            extra_parts.append(f"big chance {big_chance}")
+        if poss_lost:
+            extra_parts.append(f"потерь {poss_lost}")
+        if ball_carries:
+            extra_parts.append(f"проносы {prog_carries}/{ball_carries}")
+        if extra_parts:
+            lines.append(f"    {' | '.join(extra_parts)}")
 
     return "\n".join(lines)
 
@@ -654,6 +672,29 @@ def format_sofascore_extra(stats: Dict) -> str:
         att_lines.append(f"  Голы из штрафной: {goals_in} | Издалека: {goals_out or 0}")
         has_att = True
 
+    goal_conv = stats.get("goalConversionPercentage")
+    if goal_conv is not None:
+        att_lines.append(f"  Конверсия голов: {goal_conv:.1f}%")
+        has_att = True
+
+    scoring_freq = stats.get("scoringFrequency")
+    if scoring_freq is not None and scoring_freq > 0:
+        att_lines.append(f"  Частота голов: каждые {scoring_freq:.0f} минут")
+        has_att = True
+
+    penalty_goals = stats.get("penaltyGoals")
+    penalties_taken = stats.get("penaltiesTaken")
+    if penalties_taken is not None and penalties_taken > 0:
+        att_lines.append(f"  Пенальти: {penalty_goals or 0} забито из {penalties_taken}")
+        has_att = True
+
+    left_goals = stats.get("leftFootGoals", 0) or 0
+    right_goals = stats.get("rightFootGoals", 0) or 0
+    head_goals = stats.get("headedGoals", 0) or 0
+    if left_goals + right_goals + head_goals > 0:
+        att_lines.append(f"  Голы: левой {left_goals} | правой {right_goals} | головой {head_goals}")
+        has_att = True
+
     if has_att:
         lines.extend(att_lines)
         lines.append("")
@@ -704,13 +745,57 @@ def format_sofascore_extra(stats: Dict) -> str:
         pass_lines.append(f"  Ключевые передачи: {key_passes}")
         has_pass = True
 
+    pass_to_assist = stats.get("passToAssist")
+    if pass_to_assist is not None and pass_to_assist > 0:
+        pass_lines.append(f"  Предголевые передачи (passToAssist): {pass_to_assist}")
+        has_pass = True
+
+    total_assist_attempt = stats.get("totalAttemptAssist")
+    if total_assist_attempt is not None and total_assist_attempt > 0:
+        pass_lines.append(f"  Попытки ассистов: {total_assist_attempt}")
+        has_pass = True
+
+    chipped = stats.get("accurateChippedPasses")
+    total_chipped = stats.get("totalChippedPasses")
+    if chipped is not None and total_chipped:
+        pass_lines.append(f"  Навесные передачи: {chipped}/{total_chipped} точных")
+        has_pass = True
+
     if has_pass:
         lines.extend(pass_lines)
+        lines.append("")
+
+    # === Physical stats ===
+    phys_lines = ["*Физика (SofaScore):*"]
+    has_phys = False
+
+    km = stats.get("kilometersCovered")
+    if km is not None:
+        phys_lines.append(f"  Пробег за сезон: {km:.1f} км")
+        has_phys = True
+
+    sprints = stats.get("numberOfSprints")
+    if sprints is not None:
+        phys_lines.append(f"  Спринтов: {sprints}")
+        has_phys = True
+
+    top_speed = stats.get("topSpeed")
+    if top_speed is not None:
+        phys_lines.append(f"  Макс скорость: {top_speed:.1f} км/ч")
+        has_phys = True
+
+    if has_phys:
+        lines.extend(phys_lines)
         lines.append("")
 
     # === Extra details ===
     extra_lines = ["*Прочее (SofaScore):*"]
     has_extra = False
+
+    dribbled_past = stats.get("dribbledPast")
+    if dribbled_past is not None and dribbled_past > 0:
+        extra_lines.append(f"  Обведён соперником: {dribbled_past}")
+        has_extra = True
 
     offsides = stats.get("offsides")
     if offsides is not None and offsides > 0:
@@ -726,11 +811,6 @@ def format_sofascore_extra(stats: Dict) -> str:
     errors_shot = stats.get("errorLeadToShot")
     if (errors_goal and errors_goal > 0) or (errors_shot and errors_shot > 0):
         extra_lines.append(f"  Ошибки → гол: {errors_goal or 0} | Ошибки → удар: {errors_shot or 0}")
-        has_extra = True
-
-    scoring_freq = stats.get("scoringFrequency")
-    if scoring_freq is not None and scoring_freq > 0:
-        extra_lines.append(f"  Частота голов: каждые {scoring_freq} минут")
         has_extra = True
 
     penalty_won = stats.get("penaltyWon")
