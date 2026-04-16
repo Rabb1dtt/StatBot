@@ -214,17 +214,23 @@ async def get_match_breakdown(
     stat_labels = {
         "goals": "Goals", "goalAssist": "Assists",
         "expectedGoals": "xG", "expectedAssists": "xA",
-        "totalShots": "Shots", "shotsOnTarget": "On target",
+        "totalShots": "Shots", "onTargetScoringAttempt": "Shots on target",
+        "blockedScoringAttempt": "Shots blocked",
         "accuratePass": "Accurate passes", "totalPass": "Total passes",
         "accurateLongBalls": "Accurate long balls", "totalLongBalls": "Long balls",
         "accurateCross": "Accurate crosses", "totalCross": "Crosses",
-        "keyPass": "Key passes",
-        "tackles": "Tackles", "interceptions": "Interceptions",
+        "accurateOppositionHalfPasses": "Accurate opp. half passes",
+        "totalOppositionHalfPasses": "Total opp. half passes",
+        "keyPass": "Key passes", "bigChanceCreated": "Big chances created",
+        "totalTackle": "Tackles", "interceptionWon": "Interceptions",
         "totalClearance": "Clearances", "ballRecovery": "Ball recoveries",
+        "challengeLost": "Challenges lost",
         "duelWon": "Duels won", "duelLost": "Duels lost",
         "aerialWon": "Aerials won", "aerialLost": "Aerials lost",
-        "successfulDribbles": "Successful dribbles", "dribbleAttempts": "Dribble attempts",
+        "wonContest": "Successful dribbles", "totalContest": "Dribble attempts",
+        "dispossessed": "Dispossessed",
         "touches": "Touches",
+        "possessionLostCtrl": "Possession lost",
         "fouls": "Fouls", "wasFouled": "Was fouled",
         "saves": "Saves", "goalsPrevented": "Goals prevented",
     }
@@ -232,8 +238,8 @@ async def get_match_breakdown(
     # Keys that should always be shown (even if 0) so the LLM sees explicit zeros
     always_show = {
         "goals", "goalAssist", "expectedGoals", "expectedAssists",
-        "successfulDribbles", "dribbleAttempts", "keyPass",
-        "tackles", "interceptions", "shotsOnTarget", "totalShots",
+        "wonContest", "totalContest", "keyPass",
+        "totalTackle", "interceptionWon", "onTargetScoringAttempt", "totalShots",
     }
 
     lines = [f"Player: {resolved.name} ({resolved.team})"]
